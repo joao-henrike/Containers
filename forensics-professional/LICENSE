@@ -1,0 +1,64 @@
+MIT License
+
+Copyright (c) 2026 Professional Forensics Container Project
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+DISCLAIMER FOR DIGITAL FORENSICS USE
+
+This software is designed for legitimate digital forensics investigations and
+security research. Users are solely responsible for:
+
+1. Ensuring they have proper legal authorization before conducting any 
+   forensic analysis or investigation.
+
+2. Complying with all applicable laws, regulations, and organizational 
+   policies in their jurisdiction.
+
+3. Maintaining proper chain of custody and evidence handling procedures.
+
+4. Following NIST SP 800-86 guidelines and other relevant standards.
+
+5. Respecting privacy rights and data protection laws (GDPR, CCPA, etc.).
+
+The authors and contributors:
+- Make no warranties regarding the accuracy or completeness of results
+- Assume no liability for any legal consequences arising from tool usage
+- Do not guarantee fitness for any particular purpose
+- Disclaim all liability for damages resulting from use or misuse
+
+FORENSIC TOOLS NOTICE
+
+This container includes various open-source forensic tools, each governed by
+their respective licenses. Users must comply with all applicable licenses.
+
+IMPROPER USE WARNING
+
+Improper use of forensic tools can:
+- Compromise evidence integrity
+- Violate privacy laws and regulations
+- Result in inadmissible evidence in legal proceedings
+- Lead to civil and criminal liability
+
+Always consult with qualified legal counsel and follow established forensic
+procedures and industry best practices.
+
+For questions or concerns, please open an issue on GitHub.

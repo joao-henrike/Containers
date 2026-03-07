@@ -1,0 +1,294 @@
+{
+  "registry_version": "2.0.0",
+  "last_updated": "2026-02-07T20:00:00Z",
+  "description": "Professional Forensics Container Module Registry",
+  "modules": {
+    "cloud-forensics": {
+      "name": "cloud-forensics",
+      "version": "1.0.0",
+      "description": "Cloud platform forensic tools for AWS, Azure, and GCP",
+      "category": "cloud",
+      "stable_version": "1.0.0",
+      "submodules": [
+        "aws-tools",
+        "azure-tools",
+        "gcp-tools",
+        "generic-cloud"
+      ],
+      "tools_count": 15,
+      "install_size_mb": 250,
+      "maintainer": "forensics-team"
+    },
+    "memory-forensics": {
+      "name": "memory-forensics",
+      "version": "2.1.0",
+      "description": "Memory analysis and forensics tools",
+      "category": "memory",
+      "stable_version": "2.1.0",
+      "submodules": [
+        "volatility",
+        "rekall",
+        "lime",
+        "avml"
+      ],
+      "tools_count": 8,
+      "install_size_mb": 180,
+      "maintainer": "forensics-team"
+    },
+    "disk-forensics": {
+      "name": "disk-forensics",
+      "version": "1.5.0",
+      "description": "Disk and file system forensics tools",
+      "category": "disk",
+      "stable_version": "1.5.0",
+      "submodules": [
+        "sleuthkit",
+        "autopsy",
+        "testdisk",
+        "foremost",
+        "scalpel"
+      ],
+      "tools_count": 12,
+      "install_size_mb": 320,
+      "maintainer": "forensics-team"
+    },
+    "network-forensics": {
+      "name": "network-forensics",
+      "version": "1.3.0",
+      "description": "Network traffic analysis and forensics",
+      "category": "network",
+      "stable_version": "1.3.0",
+      "submodules": [
+        "wireshark",
+        "zeek",
+        "tcpdump",
+        "ngrep"
+      ],
+      "tools_count": 10,
+      "install_size_mb": 200,
+      "maintainer": "forensics-team"
+    },
+    "mobile-forensics": {
+      "name": "mobile-forensics",
+      "version": "1.0.0",
+      "description": "Mobile device forensics (Android/iOS)",
+      "category": "mobile",
+      "stable_version": "1.0.0",
+      "submodules": [
+        "android-tools",
+        "ios-tools",
+        "backup-extractors"
+      ],
+      "tools_count": 8,
+      "install_size_mb": 150,
+      "maintainer": "forensics-team"
+    },
+    "malware-analysis": {
+      "name": "malware-analysis",
+      "version": "2.0.0",
+      "description": "Malware analysis and reverse engineering",
+      "category": "malware",
+      "stable_version": "2.0.0",
+      "submodules": [
+        "yara",
+        "radare2",
+        "ghidra",
+        "cuckoo"
+      ],
+      "tools_count": 15,
+      "install_size_mb": 500,
+      "maintainer": "forensics-team"
+    },
+    "windows-forensics": {
+      "name": "windows-forensics",
+      "version": "1.8.0",
+      "description": "Windows artifact analysis tools",
+      "category": "windows",
+      "stable_version": "1.8.0",
+      "submodules": [
+        "regripper",
+        "plaso",
+        "evtx-parser",
+        "prefetch-parser"
+      ],
+      "tools_count": 10,
+      "install_size_mb": 180,
+      "maintainer": "forensics-team"
+    },
+    "linux-forensics": {
+      "name": "linux-forensics",
+      "version": "1.4.0",
+      "description": "Linux system forensics tools",
+      "category": "linux",
+      "stable_version": "1.4.0",
+      "submodules": [
+        "auditd-tools",
+        "log-parsers",
+        "ext4-tools"
+      ],
+      "tools_count": 8,
+      "install_size_mb": 120,
+      "maintainer": "forensics-team"
+    },
+    "container-forensics": {
+      "name": "container-forensics",
+      "version": "1.0.0",
+      "description": "Container and orchestration forensics",
+      "category": "container",
+      "stable_version": "1.0.0",
+      "submodules": [
+        "docker-forensics",
+        "kubernetes-tools"
+      ],
+      "tools_count": 6,
+      "install_size_mb": 100,
+      "maintainer": "forensics-team"
+    },
+    "database-forensics": {
+      "name": "database-forensics",
+      "version": "1.2.0",
+      "description": "Database forensics and recovery",
+      "category": "database",
+      "stable_version": "1.2.0",
+      "submodules": [
+        "mysql-tools",
+        "postgresql-tools",
+        "mongodb-tools"
+      ],
+      "tools_count": 9,
+      "install_size_mb": 140,
+      "maintainer": "forensics-team"
+    },
+    "email-forensics": {
+      "name": "email-forensics",
+      "version": "1.1.0",
+      "description": "Email forensics and analysis",
+      "category": "email",
+      "stable_version": "1.1.0",
+      "submodules": [
+        "pst-parser",
+        "eml-parser",
+        "header-analyzer"
+      ],
+      "tools_count": 7,
+      "install_size_mb": 90,
+      "maintainer": "forensics-team"
+    },
+    "osint-tools": {
+      "name": "osint-tools",
+      "version": "1.0.0",
+      "description": "Open Source Intelligence gathering and analysis tools",
+      "category": "osint",
+      "stable_version": "1.0.0",
+      "submodules": [
+        "social-media",
+        "domain-recon",
+        "people-search",
+        "geolocation",
+        "darkweb-tools"
+      ],
+      "tools_count": 25,
+      "install_size_mb": 450,
+      "maintainer": "forensics-team"
+    },
+    "threat-intelligence": {
+      "name": "threat-intelligence",
+      "version": "1.0.0",
+      "description": "Threat intelligence collection and analysis",
+      "category": "intelligence",
+      "stable_version": "1.0.0",
+      "submodules": [
+        "ioc-feeds",
+        "threat-hunting",
+        "misp-integration",
+        "opencti-tools"
+      ],
+      "tools_count": 15,
+      "install_size_mb": 320,
+      "maintainer": "forensics-team"
+    },
+    "web-recon": {
+      "name": "web-recon",
+      "version": "1.0.0",
+      "description": "Web reconnaissance and investigation tools",
+      "category": "recon",
+      "stable_version": "1.0.0",
+      "submodules": [
+        "subdomain-enum",
+        "web-scraping",
+        "wayback-analysis",
+        "dns-recon"
+      ],
+      "tools_count": 18,
+      "install_size_mb": 280,
+      "maintainer": "forensics-team"
+    }
+  },
+  "categories": {
+    "cloud": {
+      "name": "Cloud Forensics",
+      "description": "Cloud platform investigation tools"
+    },
+    "memory": {
+      "name": "Memory Forensics",
+      "description": "RAM and memory dump analysis"
+    },
+    "disk": {
+      "name": "Disk Forensics",
+      "description": "Disk imaging and file system analysis"
+    },
+    "network": {
+      "name": "Network Forensics",
+      "description": "Network traffic capture and analysis"
+    },
+    "mobile": {
+      "name": "Mobile Forensics",
+      "description": "Mobile device investigation"
+    },
+    "malware": {
+      "name": "Malware Analysis",
+      "description": "Malware reverse engineering and analysis"
+    },
+    "windows": {
+      "name": "Windows Forensics",
+      "description": "Windows artifact analysis"
+    },
+    "linux": {
+      "name": "Linux Forensics",
+      "description": "Linux system investigation"
+    },
+    "container": {
+      "name": "Container Forensics",
+      "description": "Container and orchestration investigation"
+    },
+    "database": {
+      "name": "Database Forensics",
+      "description": "Database investigation and recovery"
+    },
+    "email": {
+      "name": "Email Forensics",
+      "description": "Email investigation and analysis"
+    },
+    "osint": {
+      "name": "OSINT Tools",
+      "description": "Open Source Intelligence gathering"
+    },
+    "intelligence": {
+      "name": "Threat Intelligence",
+      "description": "Threat intelligence and IOC analysis"
+    },
+    "recon": {
+      "name": "Web Reconnaissance",
+      "description": "Web and domain reconnaissance"
+    }
+  },
+  "metadata": {
+    "total_modules": 14,
+    "total_submodules": 53,
+    "supported_platforms": ["linux"],
+    "min_disk_space_gb": 10,
+    "recommended_ram_gb": 16,
+    "compliance": ["NIST-SP-800-86"],
+    "license": "MIT"
+  }
+}

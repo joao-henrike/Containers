@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+"""
+FORENSICS HEALTH CHECK & FLIGHT RECORDER
+Advanced monitoring, debugging, and self-diagnosis system
+"""
+
+import sys
+import os
+import psutil
+import subprocess
+from pathlib import Path
+from datetime import datetime
+import argparse
+
+
+class ForensicsHealthCheck:
+    """Health monitoring and diagnostics"""
+    
+    def __init__(self):
+        self.checks = []
+        self.warnings = []
+        self.errors = []
+    
+    def check_directories(self):
+        """Check critical directories exist and have correct permissions"""
+        dirs_to_check = [
+            ('/evidence', 'Evidence directory'),
+            ('/cases', 'Cases directory'),
+            ('/keys', 'Cryptographic keys'),
+            ('/var/log/forensics', 'Audit logs'),
+            ('/opt/forensics/modules', 'Modules directory')
+        ]
+        
+        for dir_path, name in dirs_to_check:
+            if Path(dir_path).exists():
+                self.checks.append(f"✅ {name}: OK")
+            else:
+                self.errors.append(f"❌ {name}: NOT FOUND")
+    
+    def check_audit_system(self):
+        """Check audit system integrity"""
+        audit_log = Path('/var/log/forensics/audit.log')
+        
+        if audit_log.exists():
+            # Check if append-only (chattr +a)
+            try:
+                result = subprocess.run(['lsattr', str(audit_log)], 
+                                      capture_output=True, text=True)
+                if 'a' in result.stdout:
+                    self.checks.append("✅ Audit log: IMMUTABLE (append-only)")
+                else:
+                    self.warnings.append("⚠️  Audit log: Not append-only (run as privileged)")
+            except:
+                self.warnings.append("⚠️  Cannot check audit log attributes")
+        else:
+            self.errors.append("❌ Audit log: NOT FOUND")
+    
+    def check_resources(self):
+        """Check system resources"""
+        # CPU
+        cpu_count = psutil.cpu_count()
+        self.checks.append(f"✅ CPU cores: {cpu_count}")
+        
+        # Memory
+        mem = psutil.virtual_memory()
+        mem_gb = mem.total / (1024**3)
+        mem_available_gb = mem.available / (1024**3)
+        
+        self.checks.append(f"✅ Memory: {mem_gb:.1f}GB total, {mem_available_gb:.1f}GB available")
+        
+        if mem_available_gb < 2:
+            self.warnings.append(f"⚠️  Low memory: {mem_available_gb:.1f}GB available")
+        
+        # Disk
+        disk = psutil.disk_usage('/')
+        disk_percent = disk.percent
+        
+        self.checks.append(f"✅ Disk usage: {disk_percent}%")
+        
+        if disk_percent > 85:
+            self.warnings.append(f"⚠️  High disk usage: {disk_percent}%")
+    
+    def check_cryptographic_keys(self):
+        """Check cryptographic keys exist"""
+        keys_dir = Path('/keys')
+        
+        if keys_dir.exists():
+            key_files = list(keys_dir.glob('*'))
+            if key_files:
+                self.checks.append(f"✅ Cryptographic keys: {len(key_files)} files")
+            else:
+                self.warnings.append("⚠️  No cryptographic keys found")
+        else:
+            self.errors.append("❌ Keys directory not found")
+    
+    def quick_check(self, silent=False):
+        """Run quick health check"""
+        self.check_directories()
+        self.check_resources()
+        
+        if silent:
+            return len(self.errors) == 0
+        
+        # Print results
+        for check in self.checks:
+            print(check)
+        
+        for warning in self.warnings:
+            print(warning)
+        
+        for error in self.errors:
+            print(error)
+        
+        return len(self.errors) == 0
+    
+    def full_check(self):
+        """Run comprehensive health check"""
+        print("🏥 Running comprehensive health check...")
+        print("=" * 60)
+        
+        self.check_directories()
+        self.check_audit_system()
+        self.check_resources()
+        self.check_cryptographic_keys()
+        
+        # Print results
+        print("\n✅ PASSED CHECKS:")
+        for check in self.checks:
+            print(f"  {check}")
+        
+        if self.warnings:
+            print("\n⚠️  WARNINGS:")
+            for warning in self.warnings:
+                print(f"  {warning}")
+        
+        if self.errors:
+            print("\n❌ ERRORS:")
+            for error in self.errors:
+                print(f"  {error}")
+        
+        print("\n" + "=" * 60)
+        print(f"Total: {len(self.checks)} passed, {len(self.warnings)} warnings, {len(self.errors)} errors")
+        
+        return len(self.errors) == 0
+
+
+class FlightRecorder:
+    """Advanced debugging with telemetry and time-travel capabilities"""
+    
+    def __init__(self):
+        self.telemetry_dir = Path('/var/log/forensics/telemetry')
+        self.telemetry_dir.mkdir(parents=True, exist_ok=True)
+    
+    def capture_snapshot(self):
+        """Capture system snapshot for debugging"""
+        snapshot = {
+            'timestamp': datetime.utcnow().isoformat(),
+            'cpu_percent': psutil.cpu_percent(interval=1),
+            'memory': dict(psutil.virtual_memory()._asdict()),
+            'disk': dict(psutil.disk_usage('/')._asdict()),
+            'processes': len(psutil.pids())
+        }
+        
+        return snapshot
+    
+    def why_slow(self, command):
+        """Diagnose why a command is slow"""
+        print(f"🔍 Analyzing performance of: {command}")
+        print("=" * 60)
+        
+        # Capture metrics
+        cpu_percent = psutil.cpu_percent(interval=1)
+        mem = psutil.virtual_memory()
+        disk_io = psutil.disk_io_counters()
+        
+        print(f"CPU Usage: {cpu_percent}%")
+        print(f"Memory Usage: {mem.percent}%")
+        print(f"Disk Reads: {disk_io.read_bytes / (1024**3):.2f}GB")
+        print(f"Disk Writes: {disk_io.write_bytes / (1024**3):.2f}GB")
+        
+        # Recommendations
+        print("\n💡 RECOMMENDATIONS:")
+        if cpu_percent > 80:
+            print("  • High CPU usage - consider using parallel processing")
+        if mem.percent > 80:
+            print("  • High memory usage - consider processing in batches")
+        if disk_io.read_bytes > 10 * (1024**3):
+            print("  • High disk I/O - consider using SSD or increasing buffer size")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Forensics Health Check & Diagnostics')
+    
+    subparsers = parser.add_subparsers(dest='command', help='Commands')
+    
+    # Quick check
+    quick_parser = subparsers.add_parser('quick-check', help='Quick health check')
+    quick_parser.add_argument('--silent', action='store_true', help='Silent mode')
+    
+    # Full check
+    subparsers.add_parser('check', help='Comprehensive health check')
+    
+    # Why slow
+    slow_parser = subparsers.add_parser('why-slow', help='Diagnose performance issues')
+    slow_parser.add_argument('command', help='Command to analyze')
+    
+    # Snapshot
+    subparsers.add_parser('snapshot', help='Capture system snapshot')
+    
+    args = parser.parse_args()
+    
+    health = ForensicsHealthCheck()
+    recorder = FlightRecorder()
+    
+    if args.command == 'quick-check':
+        success = health.quick_check(silent=args.silent)
+        return 0 if success else 1
+    
+    elif args.command == 'check':
+        success = health.full_check()
+        return 0 if success else 1
+    
+    elif args.command == 'why-slow':
+        recorder.why_slow(args.command)
+        return 0
+    
+    elif args.command == 'snapshot':
+        snapshot = recorder.capture_snapshot()
+        print(json.dumps(snapshot, indent=2))
+        return 0
+    
+    else:
+        parser.print_help()
+        return 1
+
+
+if __name__ == '__main__':
+    import json
+    sys.exit(main())

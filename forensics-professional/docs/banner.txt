@@ -1,0 +1,87 @@
+
+╔════════════════════════════════════════════════════════════════════════╗
+║                                                                        ║
+║     🔍 PROFESSIONAL FORENSICS CONTAINER v2.1.0 🔍                     ║
+║                                                                        ║
+║          Post-Quantum Secured | NIST Compliant | OSINT Ready          ║
+║       Immutable Audit Trail | Modular Architecture | 14 Modules       ║
+║                                                                        ║
+╚════════════════════════════════════════════════════════════════════════╝
+
+👤 USER: sherlock (full forensic capabilities)
+🔐 ROOT: Encrypted with post-quantum cryptography (owner only)
+
+🎯 QUICK START COMMANDS:
+────────────────────────────────────────────────────────────────────────
+  forensics-modules list              List available tool modules
+  forensics-modules install <module>  Install forensic tools
+  forensics-audit verify              Verify audit log integrity
+  forensics-health check              System health check
+  
+📁 DIRECTORIES:
+────────────────────────────────────────────────────────────────────────
+  /evidence   Evidence files (READ-ONLY - protected)
+  /cases      Case working directories
+  /keys       Cryptographic keys (protected)
+  /logs       Immutable audit trails
+  /reports    Generated forensic reports
+
+🔧 AVAILABLE MODULES (14 total - install on-demand):
+────────────────────────────────────────────────────────────────────────
+  FORENSICS:
+  cloud-forensics      AWS, Azure, GCP tools
+  memory-forensics     Volatility, Rekall, memory analysis
+  disk-forensics       Sleuthkit, testdisk, file carving
+  network-forensics    Wireshark, tcpdump, traffic analysis
+  mobile-forensics     Android/iOS device forensics
+  malware-analysis     YARA, radare2, Ghidra
+  windows-forensics    Registry, EVTX, Prefetch analysis
+  linux-forensics      Auditd, log analysis, ext4 tools
+  container-forensics  Docker/Kubernetes forensics
+  database-forensics   MySQL, PostgreSQL, MongoDB tools
+  email-forensics      PST/EML parsing, header analysis
+  
+  OSINT & INTELLIGENCE: 🆕
+  osint-tools          Social media, people search, dark web
+  threat-intelligence  IOC feeds, MISP, threat hunting
+  web-recon            Subdomain enum, web scraping, DNS
+
+🛡️  SECURITY FEATURES:
+────────────────────────────────────────────────────────────────────────
+  ✓ Post-Quantum Cryptography (Kyber/Dilithium)
+  ✓ Immutable Audit Logs (Ed25519 + GPG signatures)
+  ✓ Chain of Custody Automation
+  ✓ Evidence Protection (cannot be deleted/modified)
+  ✓ NIST SP 800-86 Compliance
+
+📊 COMPLIANCE & REPORTING:
+────────────────────────────────────────────────────────────────────────
+  forensics-compliance validate       Validate NIST compliance
+  forensics-report generate           Generate forensic reports
+  forensics-audit show                View audit trail
+
+⚡ PERFORMANCE:
+────────────────────────────────────────────────────────────────────────
+  • Parallel processing enabled
+  • Multi-threaded analysis
+  • Optimized for forensic workloads
+
+📖 HELP & DOCUMENTATION:
+────────────────────────────────────────────────────────────────────────
+  Run any command with --help for detailed usage
+  Documentation: /opt/forensics/docs/
+  OSINT Guide: /opt/forensics/docs/OSINT_INTELLIGENCE_TOOLS.md
+
+⚠️  IMPORTANT REMINDERS:
+────────────────────────────────────────────────────────────────────────
+  • All actions are logged in immutable audit trail
+  • Evidence is protected - cannot be deleted or modified
+  • Install modules as needed to keep container lean
+  • Chain of custody is automatically maintained
+  • Use OSINT tools ethically and legally
+
+════════════════════════════════════════════════════════════════════════
+ Professional Digital Forensics | Open Source | Community Driven
+ v2.1.0 | 14 Modules | 161+ Tools | OSINT Ready
+════════════════════════════════════════════════════════════════════════
+

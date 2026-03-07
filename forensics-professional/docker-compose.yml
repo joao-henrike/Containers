@@ -1,0 +1,120 @@
+version: '3.8'
+
+services:
+  forensics:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILDKIT_INLINE_CACHE: 1
+    
+    image: forensics-professional:2.0.0
+    container_name: forensics-workstation
+    hostname: forensics-lab
+    
+    # Privileged mode required for:
+    # - chattr +a (immutable logs)
+    # - Full forensic capabilities
+    privileged: true
+    
+    # Security context
+    security_opt:
+      - apparmor=unconfined
+    
+    # Resource limits (adjust based on your system)
+    deploy:
+      resources:
+        limits:
+          cpus: '8'      # Use all available cores for parallel processing
+          memory: 16G    # Generous memory for forensic analysis
+        reservations:
+          cpus: '4'
+          memory: 8G
+    
+    # Environment variables
+    environment:
+      - FORENSICS_VERSION=2.0.0
+      - TZ=UTC
+      - CASE_NUMBER=${CASE_NUMBER:-CASE-0001}
+      - INVESTIGATOR=${INVESTIGATOR:-Unknown}
+      - ORGANIZATION=${ORGANIZATION:-Forensics Lab}
+    
+    # Volume mounts
+    volumes:
+      # Evidence (READ-ONLY)
+      - type: bind
+        source: ./evidence
+        target: /evidence
+        read_only: true
+      
+      # Cases (read-write)
+      - type: bind
+        source: ./cases
+        target: /cases
+        read_only: false
+      
+      # Cryptographic keys (persistent, protected)
+      - type: bind
+        source: ./keys
+        target: /keys
+        read_only: false
+      
+      # Audit logs (persistent, append-only)
+      - type: bind
+        source: ./logs
+        target: /var/log/forensics
+        read_only: false
+      
+      # Reports (read-write)
+      - type: bind
+        source: ./reports
+        target: /reports
+        read_only: false
+      
+      # Modules (persistent installations)
+      - type: bind
+        source: ./modules
+        target: /opt/forensics/modules
+        read_only: false
+      
+      # Config (persistent configuration)
+      - type: bind
+        source: ./config
+        target: /etc/forensics
+        read_only: false
+    
+    # Network configuration
+    network_mode: bridge
+    
+    # DNS servers (optional - customize as needed)
+    # dns:
+    #   - 8.8.8.8
+    #   - 8.8.4.4
+    
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
+        labels: "forensics,audit,professional"
+    
+    # Keep container running
+    stdin_open: true
+    tty: true
+    
+    # Labels
+    labels:
+      com.forensics.version: "2.0.0"
+      com.forensics.type: "professional-workstation"
+      com.forensics.compliance: "NIST-SP-800-86"
+      com.forensics.crypto: "post-quantum"
+
+# Networks
+networks:
+  default:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.26.0.0/16

@@ -1,0 +1,304 @@
+# ==============================================================================
+# Professional Forensics Container - .gitignore
+# ==============================================================================
+
+# ==============================================================================
+# FORENSIC DATA - NEVER COMMIT THESE!
+# ==============================================================================
+
+# Evidence files - contain actual investigation data
+evidence/*
+!evidence/.gitkeep
+
+# Case files - contain sensitive investigation information
+cases/*
+!cases/.gitkeep
+
+# Reports - may contain confidential findings
+reports/*
+!reports/.gitkeep
+
+# Forensic evidence file types
+*.dd
+*.img
+*.raw
+*.E01
+*.Ex01
+*.L01
+*.Lx01
+*.AFF
+*.vmdk
+*.vdi
+*.vhd
+*.mem
+*.dmp
+*.pcap
+*.pcapng
+
+# ==============================================================================
+# CRYPTOGRAPHIC KEYS - CRITICAL SECURITY
+# ==============================================================================
+
+# Key directory
+keys/*
+!keys/.gitkeep
+
+# Key file types
+*.key
+*.pem
+*.gpg
+*.asc
+*.p12
+*.pfx
+*_rsa
+*_rsa.pub
+*_ed25519
+*_ed25519.pub
+
+# ==============================================================================
+# LOGS - MAY CONTAIN SENSITIVE INFO
+# ==============================================================================
+
+# Log directory
+logs/*
+!logs/.gitkeep
+
+# Log files
+*.log
+*.log.*
+audit.log*
+custody.log*
+
+# ==============================================================================
+# DOCKER & CONTAINERS
+# ==============================================================================
+
+# Docker
+.docker/
+docker-compose.override.yml
+.dockerignore.swp
+
+# Container data
+modules/installed/*
+!modules/installed/.gitkeep
+
+# ==============================================================================
+# OPERATING SYSTEM FILES
+# ==============================================================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# ==============================================================================
+# IDE & EDITORS
+# ==============================================================================
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# JetBrains IDEs
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+[._]*.s[a-v][a-z]
+[._]*.sw[a-p]
+[._]s[a-rt-v][a-z]
+[._]ss[a-gi-z]
+[._]sw[a-p]
+*.swp
+*.swo
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+
+# Nano
+*.save
+*.swp
+
+# ==============================================================================
+# PROGRAMMING LANGUAGES
+# ==============================================================================
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.pytype/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+venv/
+env/
+ENV/
+.venv
+
+# Node.js (if any web components)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+.npm
+
+# ==============================================================================
+# TEMPORARY & BACKUP FILES
+# ==============================================================================
+
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+*.orig
+*~
+*.cache
+
+# ==============================================================================
+# COMPILED & BUILD FILES
+# ==============================================================================
+
+*.o
+*.a
+*.so
+*.exe
+*.out
+*.app
+
+# ==============================================================================
+# ARCHIVES (might contain evidence)
+# ==============================================================================
+
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.tar.bz2
+*.rar
+*.7z
+*.dmg
+*.iso
+
+# ==============================================================================
+# CONFIGURATION (user-specific)
+# ==============================================================================
+
+# Local environment overrides
+.env.local
+.env.*.local
+config/local.json
+
+# ==============================================================================
+# SECURITY
+# ==============================================================================
+
+# Secrets
+secrets/
+*.secret
+credentials.json
+.credentials
+
+# SSL/TLS
+*.crt
+*.cer
+*.der
+
+# ==============================================================================
+# PROJECT SPECIFIC
+# ==============================================================================
+
+# Module download cache (if implemented)
+.module-cache/
+
+# Telemetry data
+telemetry/
+*.telemetry
+
+# Test data
+test-evidence/
+test-cases/
+
+# ==============================================================================
+# KEEP THESE FILES (exceptions to rules above)
+# ==============================================================================
+
+# Keep .gitkeep files to maintain directory structure
+!**/.gitkeep
+
+# Keep example/template files
+!config/example.json
+!*.example
+
+# ==============================================================================
+# END OF .gitignore
+# ==============================================================================
+

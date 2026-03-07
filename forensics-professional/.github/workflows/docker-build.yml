@@ -1,0 +1,74 @@
+name: Docker Build and Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+    
+    - name: Build Docker image
+      run: |
+        docker-compose build
+    
+    - name: Start container
+      run: |
+        docker-compose up -d
+        sleep 10  # Wait for initialization
+    
+    - name: Verify container is running
+      run: |
+        docker ps | grep forensics-workstation
+    
+    - name: Run health check
+      run: |
+        docker exec forensics-workstation forensics-health quick-check
+    
+    - name: Verify audit system
+      run: |
+        docker exec forensics-workstation forensics-audit verify
+    
+    - name: Test module listing
+      run: |
+        docker exec forensics-workstation forensics-modules list
+    
+    - name: Show container logs
+      if: failure()
+      run: |
+        docker-compose logs
+    
+    - name: Cleanup
+      if: always()
+      run: |
+        docker-compose down -v
+
+  security-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'config'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+    
+    - name: Upload Trivy results to GitHub Security
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
