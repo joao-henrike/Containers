@@ -1,120 +1,70 @@
-version: '3.8'
+# ============================================================================
+# Professional Forensics Container - docker-compose.yml v2.1.0-FINAL
+# ============================================================================
+# CHANGELOG desta versão:
+#   - FIX: Tag 'version:' removida (obsoleta no Docker Compose V2, causava warning)
+#   - FIX: Bloco 'deploy > resources' com limites estáticos (cpus/memory) removido
+#          O container agora escala dinamicamente com todos os recursos do host
+#   - FIX: Volume de chaves apontado para /opt/forensics/quantum-keys (local exato
+#          onde o script ML-DSA-65 busca as chaves para liberar acesso root)
+#   - FEAT: privileged: true mantido (necessário para tcpdump/tshark e chattr +a)
+#   - FEAT: hostname e container_name definidos para clareza de identificação
+# ============================================================================
 
 services:
-  forensics:
+  forensics-workstation:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        BUILDKIT_INLINE_CACHE: 1
-    
-    image: forensics-professional:2.0.0
+    image: forensics-professional:v2.1.0-FINAL
     container_name: forensics-workstation
     hostname: forensics-lab
-    
-    # Privileged mode required for:
-    # - chattr +a (immutable logs)
-    # - Full forensic capabilities
-    privileged: true
-    
-    # Security context
-    security_opt:
-      - apparmor=unconfined
-    
-    # Resource limits (adjust based on your system)
-    deploy:
-      resources:
-        limits:
-          cpus: '8'      # Use all available cores for parallel processing
-          memory: 16G    # Generous memory for forensic analysis
-        reservations:
-          cpus: '4'
-          memory: 8G
-    
-    # Environment variables
-    environment:
-      - FORENSICS_VERSION=2.0.0
-      - TZ=UTC
-      - CASE_NUMBER=${CASE_NUMBER:-CASE-0001}
-      - INVESTIGATOR=${INVESTIGATOR:-Unknown}
-      - ORGANIZATION=${ORGANIZATION:-Forensics Lab}
-    
-    # Volume mounts
-    volumes:
-      # Evidence (READ-ONLY)
-      - type: bind
-        source: ./evidence
-        target: /evidence
-        read_only: true
-      
-      # Cases (read-write)
-      - type: bind
-        source: ./cases
-        target: /cases
-        read_only: false
-      
-      # Cryptographic keys (persistent, protected)
-      - type: bind
-        source: ./keys
-        target: /keys
-        read_only: false
-      
-      # Audit logs (persistent, append-only)
-      - type: bind
-        source: ./logs
-        target: /var/log/forensics
-        read_only: false
-      
-      # Reports (read-write)
-      - type: bind
-        source: ./reports
-        target: /reports
-        read_only: false
-      
-      # Modules (persistent installations)
-      - type: bind
-        source: ./modules
-        target: /opt/forensics/modules
-        read_only: false
-      
-      # Config (persistent configuration)
-      - type: bind
-        source: ./config
-        target: /etc/forensics
-        read_only: false
-    
-    # Network configuration
-    network_mode: bridge
-    
-    # DNS servers (optional - customize as needed)
-    # dns:
-    #   - 8.8.8.8
-    #   - 8.8.4.4
-    
-    # Logging configuration
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "100m"
-        max-file: "10"
-        labels: "forensics,audit,professional"
-    
-    # Keep container running
+
+    # Mantém o container ativo e interativo para uso do shell forense
     stdin_open: true
     tty: true
-    
-    # Labels
-    labels:
-      com.forensics.version: "2.0.0"
-      com.forensics.type: "professional-workstation"
-      com.forensics.compliance: "NIST-SP-800-86"
-      com.forensics.crypto: "post-quantum"
 
-# Networks
-networks:
-  default:
-    driver: bridge
-    ipam:
-      driver: default
-      config:
-        - subnet: 172.26.0.0/16
+    # Modo privilegiado é obrigatório para:
+    #   - Capturas de pacote avançadas (tcpdump, tshark)
+    #   - Montagem de partições via loop device
+    #   - Atributos de imutabilidade (chattr +a nos logs de auditoria)
+    privileged: true
+
+    # Sem bloco 'deploy > resources' — o container usa os recursos disponíveis
+    # dinamicamente, evitando erros em hosts com menos de 8 CPUs ou 16 GB RAM.
+
+    environment:
+      - TZ=UTC
+      - FORENSICS_VERSION=2.1.0-FINAL
+      - FORENSICS_USER=sherlock
+
+    volumes:
+      # /evidence: SOMENTE LEITURA — evidências não podem ser alteradas ou deletadas
+      - ./evidence:/evidence:ro
+
+      # /cases: leitura e escrita — diretório de trabalho do analista
+      - ./cases:/cases
+
+      # /logs → /var/log/forensics: audit logs imutáveis (append-only via chattr +a)
+      - ./logs:/var/log/forensics
+
+      # /keys → /opt/forensics/quantum-keys: chaves pós-quânticas (ML-DSA-65)
+      # Este é o caminho exato que o script de autenticação PQC consulta
+      - ./keys:/opt/forensics/quantum-keys
+
+      # /reports: relatórios assinados digitalmente gerados pelo analista
+      - ./reports:/reports
+
+      # /config: configurações personalizadas do analista e do sistema
+      - ./config:/etc/forensics
+
+    # Política de restart: reinicia automaticamente se o container cair
+    restart: unless-stopped
+
+    # Labels de identificação e metadados
+    labels:
+      - "forensics.version=2.1.0"
+      - "forensics.compliance=NIST-SP-800-86"
+      - "forensics.crypto=Post-Quantum"
+      - "forensics.user=sherlock"
+      - "maintainer=joao-henrike"
