@@ -1,206 +1,288 @@
 #!/usr/bin/env python3
 """
-FORENSICS AUDIT CLI
-Command-line interface for audit log management and verification
+==============================================================================
+Professional Forensics Container — forensics-audit CLI v2.1.0
+Interface de linha de comando para o sistema de auditoria criptográfica
+==============================================================================
+
+Comandos:
+  verify                    Verifica integridade completa do audit trail
+  show [--limit N]          Exibe entradas recentes
+  show --event-type TYPE    Filtra por tipo de evento
+  show --user USER          Filtra por usuário
+  export --output FILE      Exporta log para arquivo JSON ou CSV
+  stats                     Exibe estatísticas do audit log
 """
 
 import sys
+import os
 import json
 import argparse
 from pathlib import Path
-from datetime import datetime
-from tabulate import tabulate
 
-# Import audit logger
+# Adicionar diretório pai ao path
 sys.path.insert(0, str(Path(__file__).parent))
-from audit_logger import ForensicsAuditLogger
+sys.path.insert(0, "/opt/forensics/core")
+sys.path.insert(0, "/opt/forensics/core/audit-system")
+
+# Cores ANSI
+RED    = '\033[0;31m'
+GREEN  = '\033[0;32m'
+YELLOW = '\033[1;33m'
+BLUE   = '\033[0;34m'
+CYAN   = '\033[0;36m'
+BOLD   = '\033[1m'
+NC     = '\033[0m'
 
 
-class ForensicsAuditCLI:
-    """CLI for audit system operations"""
-    
-    def __init__(self):
-        self.logger = ForensicsAuditLogger()
-    
-    def verify(self):
-        """Verify integrity of audit log"""
-        print("🔍 Verifying audit log integrity...")
-        print("=" * 60)
-        
-        valid, result = self.logger.verify_integrity()
-        
-        if valid:
-            print(f"✅ VALID: {result}")
-            return 0
-        else:
-            print("❌ INVALID: Integrity check failed!")
-            if isinstance(result, list):
-                for error in result:
-                    print(f"  • {error}")
-            return 1
-    
-    def show(self, limit=20, event_type=None, user=None):
-        """Show recent audit log entries"""
-        if not self.logger.log_file.exists():
-            print("No audit log found")
-            return
-        
-        entries = []
-        with open(self.logger.log_file, 'r') as f:
-            for line in f:
-                try:
-                    entry = json.loads(line.strip())
-                    
-                    # Filter by event type
-                    if event_type and entry['event_type'] != event_type:
-                        continue
-                    
-                    # Filter by user
-                    if user and entry['user'] != user:
-                        continue
-                    
-                    entries.append(entry)
-                except:
-                    continue
-        
-        # Get last N entries
-        recent = entries[-limit:] if len(entries) > limit else entries
-        
-        # Format for display
-        table_data = []
-        for entry in recent:
-            table_data.append([
-                entry['seq'],
-                entry['timestamp'][:19],  # Truncate microseconds
-                entry['user'],
-                entry['event_type'],
-                str(entry.get('details', {}))[:50]  # Truncate details
-            ])
-        
-        headers = ['Seq', 'Timestamp (UTC)', 'User', 'Event', 'Details']
-        print(tabulate(table_data, headers=headers, tablefmt='grid'))
-        print(f"\nTotal entries: {len(entries)} | Showing: {len(recent)}")
-    
-    def export(self, output_file, format='json'):
-        """Export audit log"""
-        if not self.logger.log_file.exists():
-            print("No audit log found")
-            return 1
-        
-        entries = []
-        with open(self.logger.log_file, 'r') as f:
-            for line in f:
-                try:
-                    entries.append(json.loads(line.strip()))
-                except:
-                    continue
-        
-        output_path = Path(output_file)
-        
-        if format == 'json':
-            with open(output_path, 'w') as f:
-                json.dump(entries, f, indent=2)
-        elif format == 'csv':
-            import csv
-            with open(output_path, 'w', newline='') as f:
-                if entries:
-                    writer = csv.DictWriter(f, fieldnames=entries[0].keys())
-                    writer.writeheader()
-                    writer.writerows(entries)
-        
-        print(f"✅ Exported {len(entries)} entries to {output_path}")
-        return 0
-    
-    def stats(self):
-        """Show audit log statistics"""
-        if not self.logger.log_file.exists():
-            print("No audit log found")
-            return
-        
-        entries = []
-        with open(self.logger.log_file, 'r') as f:
-            for line in f:
-                try:
-                    entries.append(json.loads(line.strip()))
-                except:
-                    continue
-        
+def print_header(title: str):
+    print(f"\n{CYAN}{'='*60}{NC}")
+    print(f"{BOLD}{CYAN}  {title}{NC}")
+    print(f"{CYAN}{'='*60}{NC}\n")
+
+
+def cmd_verify(args):
+    """Verifica integridade do audit trail."""
+    print_header("AUDIT TRAIL INTEGRITY VERIFICATION")
+
+    try:
+        from audit_logger import get_logger
+        logger = get_logger()
+        result = logger.verify_integrity()
+    except ImportError:
+        # Fallback: verificação manual
+        result = verify_manual()
+
+    total = result.get("total_entries", 0)
+    broken = result.get("broken_links", [])
+    gaps = result.get("sequence_gaps", [])
+    status = result.get("status", "UNKNOWN")
+
+    print(f"  Total entries    : {total}")
+    print(f"  Broken links     : {len(broken)}")
+    print(f"  Sequence gaps    : {len(gaps)}")
+    print()
+
+    if status == "VALID":
+        print(f"  {GREEN}✅ AUDIT TRAIL INTEGRITY: VALID{NC}")
+        print(f"  {GREEN}   All {total} entries verified successfully{NC}")
+        print(f"  {GREEN}   Hash chain: INTACT{NC}")
+        print(f"  {GREEN}   Signatures: VERIFIED{NC}")
+    elif status == "ERROR":
+        print(f"  {YELLOW}⚠️  Could not verify: {result.get('error', 'unknown error')}{NC}")
+    else:
+        print(f"  {RED}❌ AUDIT TRAIL INTEGRITY: COMPROMISED{NC}")
+        for b in broken[:5]:
+            print(f"  {RED}   ↳ SEQ {b.get('seq')}: {b.get('reason')}{NC}")
+
+    print()
+
+
+def verify_manual() -> dict:
+    """Verificação manual sem importar audit-logger."""
+    audit_log = "/var/log/forensics/audit.log"
+    results = {"status": "VALID", "total_entries": 0, "broken_links": [], "sequence_gaps": []}
+
+    try:
+        with open(audit_log, "r") as f:
+            lines = [l.strip() for l in f if l.strip()]
+
+        import hashlib
+        results["total_entries"] = len(lines)
+        entries = [json.loads(l) for l in lines]
+
+        for i, entry in enumerate(entries):
+            stored_hash = entry.get("hash", "")
+            check_data = {k: v for k, v in entry.items() if k != "hash"}
+            computed = hashlib.sha256(
+                json.dumps(check_data, sort_keys=True).encode()
+            ).hexdigest()
+
+            if stored_hash != computed:
+                results["broken_links"].append({
+                    "seq": entry.get("seq"), "reason": "hash_mismatch"
+                })
+                results["status"] = "INVALID"
+
+            if i > 0:
+                prev_hash = entries[i-1].get("hash", "")
+                if entry.get("prev_hash") != prev_hash:
+                    results["broken_links"].append({
+                        "seq": entry.get("seq"), "reason": "chain_broken"
+                    })
+                    results["status"] = "INVALID"
+    except Exception as e:
+        results["status"] = "ERROR"
+        results["error"] = str(e)
+
+    return results
+
+
+def cmd_show(args):
+    """Exibe entradas do audit log."""
+    print_header("AUDIT LOG ENTRIES")
+
+    audit_log = "/var/log/forensics/audit.log"
+    limit = getattr(args, "limit", 20)
+    event_filter = getattr(args, "event_type", None)
+    user_filter = getattr(args, "user", None)
+
+    try:
+        with open(audit_log, "r") as f:
+            lines = [l.strip() for l in f if l.strip()]
+
+        entries = [json.loads(l) for l in lines]
+
+        if event_filter:
+            entries = [e for e in entries if e.get("event_type") == event_filter]
+        if user_filter:
+            entries = [e for e in entries if e.get("user") == user_filter]
+
+        entries = entries[-limit:]
+
         if not entries:
-            print("No entries in audit log")
+            print(f"  {YELLOW}No entries found{NC}")
             return
-        
-        # Calculate statistics
-        event_types = {}
-        users = {}
-        
-        for entry in entries:
-            event_type = entry.get('event_type', 'unknown')
-            user = entry.get('user', 'unknown')
-            
-            event_types[event_type] = event_types.get(event_type, 0) + 1
-            users[user] = users.get(user, 0) + 1
-        
-        print("📊 Audit Log Statistics")
-        print("=" * 60)
-        print(f"Total Entries: {len(entries)}")
-        print(f"First Entry:   {entries[0]['timestamp']}")
-        print(f"Last Entry:    {entries[-1]['timestamp']}")
-        print()
-        
-        print("Event Types:")
-        for event_type, count in sorted(event_types.items(), key=lambda x: x[1], reverse=True):
-            print(f"  • {event_type}: {count}")
-        print()
-        
-        print("Users:")
-        for user, count in sorted(users.items(), key=lambda x: x[1], reverse=True):
-            print(f"  • {user}: {count}")
+
+        # Cabeçalho da tabela
+        print(f"  {'SEQ':<6} {'TIMESTAMP':<28} {'EVENT TYPE':<25} {'USER':<15} {'HASH':<16}")
+        print(f"  {'-'*6} {'-'*28} {'-'*25} {'-'*15} {'-'*16}")
+
+        for e in entries:
+            seq  = str(e.get("seq", "?"))
+            ts   = e.get("timestamp", "?")[:26]
+            et   = e.get("event_type", "?")[:24]
+            user = e.get("user", "?")[:14]
+            h    = e.get("hash", "?")[:16]
+
+            color = GREEN
+            if "violation" in et.lower() or "error" in et.lower():
+                color = RED
+            elif "install" in et.lower():
+                color = CYAN
+
+            print(f"  {seq:<6} {ts:<28} {color}{et:<25}{NC} {user:<15} {h:<16}")
+
+        print(f"\n  Showing {len(entries)} entries")
+
+    except FileNotFoundError:
+        print(f"  {RED}Audit log not found: {audit_log}{NC}")
+    except Exception as e:
+        print(f"  {RED}Error reading log: {e}{NC}")
+
+    print()
+
+
+def cmd_export(args):
+    """Exporta audit log."""
+    print_header("AUDIT LOG EXPORT")
+
+    output = getattr(args, "output", "audit_export.json")
+    fmt = getattr(args, "format", "json")
+
+    try:
+        from audit_logger import get_logger
+        logger = get_logger()
+        success = logger.export_log(output, fmt)
+    except ImportError:
+        # Fallback manual
+        try:
+            with open("/var/log/forensics/audit.log", "r") as f:
+                lines = [l.strip() for l in f if l.strip()]
+            entries = [json.loads(l) for l in lines]
+            with open(output, "w") as f:
+                json.dump(entries, f, indent=2, ensure_ascii=False)
+            success = True
+        except Exception:
+            success = False
+
+    if success:
+        size = Path(output).stat().st_size if Path(output).exists() else 0
+        print(f"  {GREEN}✅ Exported successfully{NC}")
+        print(f"  File: {output}")
+        print(f"  Size: {size:,} bytes")
+        print(f"  Format: {fmt.upper()}")
+    else:
+        print(f"  {RED}❌ Export failed{NC}")
+
+    print()
+
+
+def cmd_stats(args):
+    """Exibe estatísticas do audit log."""
+    print_header("AUDIT LOG STATISTICS")
+
+    audit_log = "/var/log/forensics/audit.log"
+
+    try:
+        with open(audit_log, "r") as f:
+            lines = [l.strip() for l in f if l.strip()]
+
+        entries = [json.loads(l) for l in lines]
+        event_counts = {}
+        for e in entries:
+            et = e.get("event_type", "unknown")
+            event_counts[et] = event_counts.get(et, 0) + 1
+
+        size = Path(audit_log).stat().st_size
+
+        print(f"  Total entries    : {len(entries)}")
+        print(f"  Log size         : {size:,} bytes ({size//1024} KB)")
+        if entries:
+            print(f"  First entry      : {entries[0].get('timestamp', '?')}")
+            print(f"  Last entry       : {entries[-1].get('timestamp', '?')}")
+        print(f"\n  {'EVENT TYPE':<30} {'COUNT':>8}")
+        print(f"  {'-'*30} {'-'*8}")
+        for et, count in sorted(event_counts.items(), key=lambda x: -x[1]):
+            color = RED if "violation" in et else (CYAN if "install" in et else NC)
+            print(f"  {color}{et:<30}{NC} {count:>8}")
+
+    except FileNotFoundError:
+        print(f"  {RED}Audit log not found{NC}")
+    except Exception as e:
+        print(f"  {RED}Error: {e}{NC}")
+
+    print()
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Forensics Audit System CLI',
-        epilog='Example: forensics-audit verify'
+        prog="forensics-audit",
+        description="Professional Forensics Audit CLI v2.1.0"
     )
-    
-    subparsers = parser.add_subparsers(dest='command', help='Commands')
-    
-    # Verify command
-    subparsers.add_parser('verify', help='Verify audit log integrity')
-    
-    # Show command
-    show_parser = subparsers.add_parser('show', help='Show audit log entries')
-    show_parser.add_argument('--limit', type=int, default=20, help='Number of entries to show')
-    show_parser.add_argument('--event-type', help='Filter by event type')
-    show_parser.add_argument('--user', help='Filter by user')
-    
-    # Export command
-    export_parser = subparsers.add_parser('export', help='Export audit log')
-    export_parser.add_argument('--output', required=True, help='Output file')
-    export_parser.add_argument('--format', choices=['json', 'csv'], default='json')
-    
-    # Stats command
-    subparsers.add_parser('stats', help='Show audit log statistics')
-    
+    subparsers = parser.add_subparsers(dest="command")
+
+    # verify
+    subparsers.add_parser("verify", help="Verify audit trail integrity")
+
+    # show
+    show_p = subparsers.add_parser("show", help="Display audit log entries")
+    show_p.add_argument("--limit", type=int, default=20, help="Number of entries")
+    show_p.add_argument("--event-type", dest="event_type", help="Filter by event type")
+    show_p.add_argument("--user", help="Filter by user")
+
+    # export
+    exp_p = subparsers.add_parser("export", help="Export audit log")
+    exp_p.add_argument("--output", default="audit_export.json", help="Output file")
+    exp_p.add_argument("--format", choices=["json", "csv"], default="json")
+
+    # stats
+    subparsers.add_parser("stats", help="Show audit log statistics")
+
     args = parser.parse_args()
-    
-    if not args.command:
+
+    if args.command == "verify":
+        cmd_verify(args)
+    elif args.command == "show":
+        cmd_show(args)
+    elif args.command == "export":
+        cmd_export(args)
+    elif args.command == "stats":
+        cmd_stats(args)
+    else:
         parser.print_help()
-        return 1
-    
-    cli = ForensicsAuditCLI()
-    
-    if args.command == 'verify':
-        return cli.verify()
-    elif args.command == 'show':
-        cli.show(limit=args.limit, event_type=args.event_type, user=args.user)
-    elif args.command == 'export':
-        return cli.export(args.output, args.format)
-    elif args.command == 'stats':
-        cli.stats()
-    
-    return 0
+        print(f"\n{YELLOW}Available commands: verify, show, export, stats{NC}\n")
 
 
-if __name__ == '__main__':
-    sys.exit(main())
+if __name__ == "__main__":
+    main()

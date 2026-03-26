@@ -1,74 +1,61 @@
-name: Docker Build and Test
+name: Docker Build & Security Scan
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main ]
+    paths:
+      - 'forensics-professional/**'
   pull_request:
     branches: [ main ]
+
+defaults:
+  run:
+    working-directory: forensics-professional
 
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
-    
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
-    
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v2
-    
-    - name: Build Docker image
-      run: |
-        docker-compose build
-    
-    - name: Start container
-      run: |
-        docker-compose up -d
-        sleep 10  # Wait for initialization
-    
-    - name: Verify container is running
-      run: |
-        docker ps | grep forensics-workstation
-    
-    - name: Run health check
-      run: |
-        docker exec forensics-workstation forensics-health quick-check
-    
-    - name: Verify audit system
-      run: |
-        docker exec forensics-workstation forensics-audit verify
-    
-    - name: Test module listing
-      run: |
-        docker exec forensics-workstation forensics-modules list
-    
-    - name: Show container logs
-      if: failure()
-      run: |
-        docker-compose logs
-    
-    - name: Cleanup
-      if: always()
-      run: |
-        docker-compose down -v
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-  security-scan:
-    runs-on: ubuntu-latest
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
-    
-    - name: Run Trivy vulnerability scanner
-      uses: aquasecurity/trivy-action@master
-      with:
-        scan-type: 'config'
-        scan-ref: '.'
-        format: 'sarif'
-        output: 'trivy-results.sarif'
-    
-    - name: Upload Trivy results to GitHub Security
-      uses: github/codeql-action/upload-sarif@v2
-      if: always()
-      with:
-        sarif_file: 'trivy-results.sarif'
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        run: |
+          docker compose build --no-cache
+
+      - name: Start container
+        run: |
+          docker compose up -d
+          sleep 10
+
+      - name: Health check
+        run: |
+          docker exec forensics-workstation forensics-health quick-check
+
+      - name: Audit verification
+        run: |
+          docker exec forensics-workstation forensics-audit verify
+
+      - name: Module list test
+        run: |
+          docker exec forensics-workstation forensics-modules list
+
+      - name: Run validation script
+        run: |
+          docker exec forensics-workstation \
+            /opt/forensics/scripts/validation-scripts/FBI_VALIDATION_CLEAN.sh
+
+      - name: Security scan (Trivy)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'forensics-professional:v2.1.0-FINAL'
+          format: 'table'
+          exit-code: '0'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Stop container
+        if: always()
+        run: docker compose down

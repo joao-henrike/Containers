@@ -1,239 +1,365 @@
 #!/usr/bin/env python3
 """
-FORENSICS HEALTH CHECK & FLIGHT RECORDER
-Advanced monitoring, debugging, and self-diagnosis system
+==============================================================================
+Professional Forensics Container — forensics-health v2.1.0
+Flight Recorder: health monitoring, performance profiling, time-travel debug
+==============================================================================
+
+Comandos:
+  check              Health check completo (CPU, RAM, disco, auditoria, módulos)
+  quick-check        Verificação rápida
+  why-slow <cmd>     Profile de performance de um comando
+  snapshot           Captura estado completo do sistema
 """
 
 import sys
 import os
-import psutil
+import json
 import subprocess
-from pathlib import Path
-from datetime import datetime
+import datetime
+import shutil
 import argparse
+import time
+from pathlib import Path
+
+# Cores ANSI
+RED    = '\033[0;31m'
+GREEN  = '\033[0;32m'
+YELLOW = '\033[1;33m'
+BLUE   = '\033[0;34m'
+CYAN   = '\033[0;36m'
+BOLD   = '\033[1m'
+NC     = '\033[0m'
+
+TELEMETRY_DIR = "/var/log/forensics/telemetry"
+AUDIT_LOG     = "/var/log/forensics/audit.log"
 
 
-class ForensicsHealthCheck:
-    """Health monitoring and diagnostics"""
-    
-    def __init__(self):
-        self.checks = []
-        self.warnings = []
-        self.errors = []
-    
-    def check_directories(self):
-        """Check critical directories exist and have correct permissions"""
-        dirs_to_check = [
-            ('/evidence', 'Evidence directory'),
-            ('/cases', 'Cases directory'),
-            ('/keys', 'Cryptographic keys'),
-            ('/var/log/forensics', 'Audit logs'),
-            ('/opt/forensics/modules', 'Modules directory')
+def _run(cmd: str, timeout: int = 10) -> str:
+    try:
+        r = subprocess.run(cmd, shell=True, capture_output=True,
+                           text=True, timeout=timeout)
+        return r.stdout.strip()
+    except Exception:
+        return ""
+
+
+def print_header(title: str):
+    print(f"\n{CYAN}{'='*60}{NC}")
+    print(f"{BOLD}{CYAN}  {title}{NC}")
+    print(f"{CYAN}{'='*60}{NC}\n")
+
+
+def check_item(label: str, ok: bool, detail: str = "", warn: bool = False):
+    if ok:
+        status = f"{GREEN}✅ OK{NC}"
+    elif warn:
+        status = f"{YELLOW}⚠️  WARN{NC}"
+    else:
+        status = f"{RED}❌ FAIL{NC}"
+    det = f"  {YELLOW}{detail}{NC}" if detail else ""
+    print(f"  {status}  {label:<35}{det}")
+
+
+# ==============================================================================
+# Checks individuais
+# ==============================================================================
+
+def check_directories() -> bool:
+    """Verifica estrutura de diretórios forenses."""
+    dirs = [
+        "/evidence", "/cases", "/keys", "/logs", "/reports",
+        "/var/log/forensics", "/opt/forensics/modules/installed",
+        "/opt/forensics/quantum-keys"
+    ]
+    all_ok = True
+    for d in dirs:
+        exists = Path(d).exists()
+        check_item(d, exists, "" if exists else "missing")
+        if not exists:
+            all_ok = False
+    return all_ok
+
+
+def check_audit_system() -> bool:
+    """Verifica sistema de auditoria."""
+    log_exists = Path(AUDIT_LOG).exists()
+    check_item("Audit log exists", log_exists,
+               f"{Path(AUDIT_LOG).stat().st_size:,} bytes" if log_exists else "missing")
+
+    if not log_exists:
+        return False
+
+    # Verificar chattr +a
+    lsattr = _run(f"lsattr {AUDIT_LOG} 2>/dev/null")
+    append_only = "a" in lsattr.split()[0] if lsattr else False
+    check_item("Audit log append-only (chattr +a)", append_only,
+               "protected" if append_only else "not protected", warn=not append_only)
+
+    # Contar entradas
+    try:
+        with open(AUDIT_LOG) as f:
+            count = sum(1 for l in f if l.strip())
+        check_item("Audit log entries", count > 0, f"{count} entries")
+    except Exception:
+        check_item("Audit log readable", False)
+
+    # Verificar chaves
+    ed_key = Path("/opt/forensics/quantum-keys/audit_ed25519.key").exists()
+    check_item("Ed25519 signing key", ed_key,
+               "present" if ed_key else "missing", warn=not ed_key)
+
+    pqc_key = Path("/opt/forensics/quantum-keys/dilithium_private.key.enc").exists()
+    check_item("PQC (ML-DSA-65) key", pqc_key,
+               "present" if pqc_key else "not set up", warn=not pqc_key)
+
+    return log_exists
+
+
+def check_modules() -> bool:
+    """Verifica módulos instalados."""
+    installed = list(Path("/opt/forensics/modules/installed").glob("*"))
+    check_item("Installed modules", True, f"{len(installed)} installed")
+
+    registry_ok = Path("/opt/forensics/modules/registry.json").exists()
+    check_item("Module registry", registry_ok,
+               "14 modules available" if registry_ok else "missing")
+
+    forensics_modules = shutil.which("forensics-modules")
+    check_item("forensics-modules CLI", bool(forensics_modules),
+               forensics_modules or "not in PATH")
+
+    return registry_ok
+
+
+def check_resources() -> tuple:
+    """Verifica CPU, RAM, disco."""
+    # CPU
+    cpu_count = os.cpu_count() or 0
+    check_item("CPU cores available", cpu_count > 0, f"{cpu_count} cores")
+
+    # RAM
+    try:
+        with open("/proc/meminfo") as f:
+            mem_info = dict(
+                line.split(":")
+                for line in f
+                if ":" in line
+            )
+        total_kb = int(mem_info.get("MemTotal", "0 kB").strip().split()[0])
+        avail_kb = int(mem_info.get("MemAvailable", "0 kB").strip().split()[0])
+        total_gb = total_kb / 1024 / 1024
+        avail_gb = avail_kb / 1024 / 1024
+        pct_used = ((total_kb - avail_kb) / total_kb * 100) if total_kb else 0
+
+        ok = avail_gb > 1.0
+        warn = avail_gb < 2.0
+        check_item("RAM available", ok,
+                   f"{avail_gb:.1f} GB free of {total_gb:.1f} GB ({pct_used:.0f}% used)",
+                   warn=warn)
+    except Exception:
+        check_item("RAM", False, "could not read")
+
+    # Disco
+    try:
+        disk = shutil.disk_usage("/")
+        free_gb  = disk.free  / 1024**3
+        total_gb = disk.total / 1024**3
+        pct_used = disk.used / disk.total * 100
+        ok   = free_gb > 5.0
+        warn = free_gb < 10.0
+        check_item("Disk space (/)", ok,
+                   f"{free_gb:.1f} GB free of {total_gb:.1f} GB ({pct_used:.0f}% used)",
+                   warn=warn)
+    except Exception:
+        check_item("Disk space", False)
+
+    return True, True
+
+
+def check_tools() -> bool:
+    """Verifica ferramentas essenciais no PATH."""
+    tools = {
+        "python3": "Python runtime",
+        "openssl": "Cryptography",
+        "gpg":     "GPG signing",
+        "git":     "Version control",
+        "curl":    "HTTP client",
+        "jq":      "JSON processor",
+    }
+    for cmd, desc in tools.items():
+        found = bool(shutil.which(cmd))
+        check_item(f"{desc} ({cmd})", found, "" if found else "not found")
+    return True
+
+
+# ==============================================================================
+# Comandos
+# ==============================================================================
+
+def cmd_check(args):
+    print_header("FORENSICS SYSTEM HEALTH CHECK")
+    print(f"  {CYAN}Timestamp: {datetime.datetime.utcnow().isoformat()}Z{NC}\n")
+
+    print(f"  {BOLD}── Directories ─────────────────────────────────{NC}")
+    check_directories()
+
+    print(f"\n  {BOLD}── Audit System ─────────────────────────────────{NC}")
+    check_audit_system()
+
+    print(f"\n  {BOLD}── Modules ──────────────────────────────────────{NC}")
+    check_modules()
+
+    print(f"\n  {BOLD}── Resources ────────────────────────────────────{NC}")
+    check_resources()
+
+    print(f"\n  {BOLD}── Core Tools ───────────────────────────────────{NC}")
+    check_tools()
+
+    print(f"\n  {CYAN}Health check complete.{NC}\n")
+
+
+def cmd_quick_check(args):
+    print_header("QUICK HEALTH CHECK")
+
+    checks = [
+        ("/evidence", "Evidence dir"),
+        ("/cases", "Cases dir"),
+        (AUDIT_LOG, "Audit log"),
+        ("/opt/forensics/modules/registry.json", "Module registry"),
+    ]
+    all_ok = True
+    for path, label in checks:
+        ok = Path(path).exists()
+        check_item(label, ok)
+        if not ok:
+            all_ok = False
+
+    # Verificar integrity rapidamente
+    try:
+        with open(AUDIT_LOG) as f:
+            count = sum(1 for l in f if l.strip())
+        check_item(f"Audit entries ({count})", count > 0)
+    except Exception:
+        pass
+
+    status = f"{GREEN}HEALTHY{NC}" if all_ok else f"{YELLOW}ISSUES DETECTED{NC}"
+    print(f"\n  Status: {status}\n")
+
+
+def cmd_why_slow(args):
+    command = getattr(args, "command_name", "")
+    print_header(f"PERFORMANCE PROFILE: {command}")
+
+    print(f"  {CYAN}Profiling: {command}{NC}\n")
+
+    # Medir tempo de execução
+    start = time.time()
+    result = _run(f"time {command} 2>&1", timeout=60)
+    elapsed = time.time() - start
+
+    print(f"  ⏱️  Wall time: {elapsed:.2f}s\n")
+
+    # Diagnóstico de I/O
+    io_stat = _run("iostat -x 1 1 2>/dev/null | tail -5")
+    if io_stat:
+        print(f"  📊 I/O stats:\n{io_stat}\n")
+
+    # Recomendações
+    print(f"  {YELLOW}💡 Recommendations:{NC}")
+    if elapsed > 30:
+        print(f"     - Consider --buffer-size for large file operations")
+        print(f"     - Check if evidence is on SSD vs HDD")
+        print(f"     - Use parallel processing where possible")
+    else:
+        print(f"     - Performance looks reasonable ({elapsed:.2f}s)")
+    print()
+
+
+def cmd_snapshot(args):
+    print_header("SYSTEM SNAPSHOT")
+
+    ts = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    snap_dir = f"{TELEMETRY_DIR}/snapshot_{ts}"
+    os.makedirs(snap_dir, exist_ok=True)
+
+    snap = {
+        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+        "hostname": _run("hostname"),
+        "kernel": _run("uname -r"),
+        "uptime": _run("uptime"),
+        "cpu_cores": os.cpu_count(),
+        "load_avg": _run("cat /proc/loadavg"),
+        "disk_usage": _run("df -h /"),
+        "processes": int(_run("ps aux | wc -l") or 0),
+        "audit_entries": 0,
+        "installed_modules": []
+    }
+
+    # Contagem de audit entries
+    try:
+        with open(AUDIT_LOG) as f:
+            snap["audit_entries"] = sum(1 for l in f if l.strip())
+    except Exception:
+        pass
+
+    # Módulos instalados
+    try:
+        snap["installed_modules"] = [
+            p.name for p in Path("/opt/forensics/modules/installed").glob("*")
         ]
-        
-        for dir_path, name in dirs_to_check:
-            if Path(dir_path).exists():
-                self.checks.append(f"✅ {name}: OK")
-            else:
-                self.errors.append(f"❌ {name}: NOT FOUND")
-    
-    def check_audit_system(self):
-        """Check audit system integrity"""
-        audit_log = Path('/var/log/forensics/audit.log')
-        
-        if audit_log.exists():
-            # Check if append-only (chattr +a)
-            try:
-                result = subprocess.run(['lsattr', str(audit_log)], 
-                                      capture_output=True, text=True)
-                if 'a' in result.stdout:
-                    self.checks.append("✅ Audit log: IMMUTABLE (append-only)")
-                else:
-                    self.warnings.append("⚠️  Audit log: Not append-only (run as privileged)")
-            except:
-                self.warnings.append("⚠️  Cannot check audit log attributes")
-        else:
-            self.errors.append("❌ Audit log: NOT FOUND")
-    
-    def check_resources(self):
-        """Check system resources"""
-        # CPU
-        cpu_count = psutil.cpu_count()
-        self.checks.append(f"✅ CPU cores: {cpu_count}")
-        
-        # Memory
-        mem = psutil.virtual_memory()
-        mem_gb = mem.total / (1024**3)
-        mem_available_gb = mem.available / (1024**3)
-        
-        self.checks.append(f"✅ Memory: {mem_gb:.1f}GB total, {mem_available_gb:.1f}GB available")
-        
-        if mem_available_gb < 2:
-            self.warnings.append(f"⚠️  Low memory: {mem_available_gb:.1f}GB available")
-        
-        # Disk
-        disk = psutil.disk_usage('/')
-        disk_percent = disk.percent
-        
-        self.checks.append(f"✅ Disk usage: {disk_percent}%")
-        
-        if disk_percent > 85:
-            self.warnings.append(f"⚠️  High disk usage: {disk_percent}%")
-    
-    def check_cryptographic_keys(self):
-        """Check cryptographic keys exist"""
-        keys_dir = Path('/keys')
-        
-        if keys_dir.exists():
-            key_files = list(keys_dir.glob('*'))
-            if key_files:
-                self.checks.append(f"✅ Cryptographic keys: {len(key_files)} files")
-            else:
-                self.warnings.append("⚠️  No cryptographic keys found")
-        else:
-            self.errors.append("❌ Keys directory not found")
-    
-    def quick_check(self, silent=False):
-        """Run quick health check"""
-        self.check_directories()
-        self.check_resources()
-        
-        if silent:
-            return len(self.errors) == 0
-        
-        # Print results
-        for check in self.checks:
-            print(check)
-        
-        for warning in self.warnings:
-            print(warning)
-        
-        for error in self.errors:
-            print(error)
-        
-        return len(self.errors) == 0
-    
-    def full_check(self):
-        """Run comprehensive health check"""
-        print("🏥 Running comprehensive health check...")
-        print("=" * 60)
-        
-        self.check_directories()
-        self.check_audit_system()
-        self.check_resources()
-        self.check_cryptographic_keys()
-        
-        # Print results
-        print("\n✅ PASSED CHECKS:")
-        for check in self.checks:
-            print(f"  {check}")
-        
-        if self.warnings:
-            print("\n⚠️  WARNINGS:")
-            for warning in self.warnings:
-                print(f"  {warning}")
-        
-        if self.errors:
-            print("\n❌ ERRORS:")
-            for error in self.errors:
-                print(f"  {error}")
-        
-        print("\n" + "=" * 60)
-        print(f"Total: {len(self.checks)} passed, {len(self.warnings)} warnings, {len(self.errors)} errors")
-        
-        return len(self.errors) == 0
+    except Exception:
+        pass
+
+    snap_file = f"{snap_dir}/snapshot.json"
+    with open(snap_file, "w") as f:
+        json.dump(snap, f, indent=2)
+
+    print(f"  {GREEN}✅ Snapshot saved:{NC}")
+    print(f"     {snap_file}")
+    print(f"\n  Key metrics:")
+    print(f"     Timestamp    : {snap['timestamp']}")
+    print(f"     Kernel       : {snap.get('kernel', '?')}")
+    print(f"     CPU cores    : {snap.get('cpu_cores', '?')}")
+    print(f"     Load avg     : {snap.get('load_avg', '?')}")
+    print(f"     Audit entries: {snap.get('audit_entries', 0)}")
+    print(f"     Installed    : {', '.join(snap.get('installed_modules', [])) or 'none'}")
+    print()
 
 
-class FlightRecorder:
-    """Advanced debugging with telemetry and time-travel capabilities"""
-    
-    def __init__(self):
-        self.telemetry_dir = Path('/var/log/forensics/telemetry')
-        self.telemetry_dir.mkdir(parents=True, exist_ok=True)
-    
-    def capture_snapshot(self):
-        """Capture system snapshot for debugging"""
-        snapshot = {
-            'timestamp': datetime.utcnow().isoformat(),
-            'cpu_percent': psutil.cpu_percent(interval=1),
-            'memory': dict(psutil.virtual_memory()._asdict()),
-            'disk': dict(psutil.disk_usage('/')._asdict()),
-            'processes': len(psutil.pids())
-        }
-        
-        return snapshot
-    
-    def why_slow(self, command):
-        """Diagnose why a command is slow"""
-        print(f"🔍 Analyzing performance of: {command}")
-        print("=" * 60)
-        
-        # Capture metrics
-        cpu_percent = psutil.cpu_percent(interval=1)
-        mem = psutil.virtual_memory()
-        disk_io = psutil.disk_io_counters()
-        
-        print(f"CPU Usage: {cpu_percent}%")
-        print(f"Memory Usage: {mem.percent}%")
-        print(f"Disk Reads: {disk_io.read_bytes / (1024**3):.2f}GB")
-        print(f"Disk Writes: {disk_io.write_bytes / (1024**3):.2f}GB")
-        
-        # Recommendations
-        print("\n💡 RECOMMENDATIONS:")
-        if cpu_percent > 80:
-            print("  • High CPU usage - consider using parallel processing")
-        if mem.percent > 80:
-            print("  • High memory usage - consider processing in batches")
-        if disk_io.read_bytes > 10 * (1024**3):
-            print("  • High disk I/O - consider using SSD or increasing buffer size")
-
+# ==============================================================================
+# Entry point
+# ==============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description='Forensics Health Check & Diagnostics')
-    
-    subparsers = parser.add_subparsers(dest='command', help='Commands')
-    
-    # Quick check
-    quick_parser = subparsers.add_parser('quick-check', help='Quick health check')
-    quick_parser.add_argument('--silent', action='store_true', help='Silent mode')
-    
-    # Full check
-    subparsers.add_parser('check', help='Comprehensive health check')
-    
-    # Why slow
-    slow_parser = subparsers.add_parser('why-slow', help='Diagnose performance issues')
-    slow_parser.add_argument('command', help='Command to analyze')
-    
-    # Snapshot
-    subparsers.add_parser('snapshot', help='Capture system snapshot')
-    
+    parser = argparse.ArgumentParser(
+        prog="forensics-health",
+        description="Forensics Health Monitor & Flight Recorder v2.1.0"
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    sub.add_parser("check", help="Full health check")
+    sub.add_parser("quick-check", help="Quick health check")
+
+    ws_p = sub.add_parser("why-slow", help="Profile a slow command")
+    ws_p.add_argument("command_name", help="Command to profile")
+
+    sub.add_parser("snapshot", help="Capture system snapshot")
+
     args = parser.parse_args()
-    
-    health = ForensicsHealthCheck()
-    recorder = FlightRecorder()
-    
-    if args.command == 'quick-check':
-        success = health.quick_check(silent=args.silent)
-        return 0 if success else 1
-    
-    elif args.command == 'check':
-        success = health.full_check()
-        return 0 if success else 1
-    
-    elif args.command == 'why-slow':
-        recorder.why_slow(args.command)
-        return 0
-    
-    elif args.command == 'snapshot':
-        snapshot = recorder.capture_snapshot()
-        print(json.dumps(snapshot, indent=2))
-        return 0
-    
+
+    dispatch = {
+        "check":       cmd_check,
+        "quick-check": cmd_quick_check,
+        "why-slow":    cmd_why_slow,
+        "snapshot":    cmd_snapshot,
+    }
+
+    if args.command in dispatch:
+        dispatch[args.command](args)
     else:
-        parser.print_help()
-        return 1
+        cmd_check(args)
 
 
-if __name__ == '__main__':
-    import json
-    sys.exit(main())
+if __name__ == "__main__":
+    main()
