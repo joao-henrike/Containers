@@ -1,249 +1,110 @@
-# Contributing to Professional Forensics Container
+# Contributing
 
-Thank you for your interest in contributing! This project is community-driven and welcomes contributions from forensic professionals, developers, and security researchers.
+Thanks for considering a contribution. This project moves slowly and
+deliberately — predictability for forensic users matters more than
+moving fast.
 
-## 🎯 Ways to Contribute
+## How to file a bug
 
-### 1. Report Bugs
-- Use GitHub Issues
-- Include detailed steps to reproduce
-- Specify your environment (OS, Docker version)
-- Include logs if applicable
+Open a GitHub issue with the **Bug report** template. Please include:
 
-### 2. Suggest Features
-- Open a GitHub Issue with label `enhancement`
-- Describe the use case
-- Explain why it's valuable for forensic investigations
+- The output of `forensics-health` and `docker version`.
+- Whether you're on Linux/macOS/Windows + Docker Desktop.
+- The exact command you ran and the full error.
+- Whether the bug is reproducible from a fresh `docker compose build`.
 
-### 3. Add Forensic Modules
-- Create module manifests (see `modules/registry.json`)
-- Document installation steps
-- Ensure tools are open-source or freely available
-- Test thoroughly before submitting
+## How to propose a feature
 
-### 4. Improve Documentation
-- Fix typos, clarify instructions
-- Add examples and use cases
-- Translate to other languages
-- Create tutorials and guides
+Open an issue with the **Feature request** template *first*. Get a
+maintainer's nod before you start coding. We routinely close PRs that
+expand scope without prior discussion.
 
-### 5. Submit Code
-- Follow the development guidelines below
-- Write tests when applicable
-- Update documentation
-- Follow security best practices
-
-## 🔧 Development Guidelines
-
-### Setting Up Development Environment
+## Development setup
 
 ```bash
-# Clone repository
-git clone https://github.com/YOUR-ORG/forensics-professional.git
-cd forensics-professional
+git clone https://github.com/joao-henrike/Containers.git
+cd Containers/forensics-professional
 
-# Create development branch
-git checkout -b feature/your-feature-name
-
-# Build container
-docker-compose build
-
-# Test changes
-docker-compose up -d
-docker exec -it forensics-workstation bash
+# Host-side dev tools (lint, type-check, test)
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
 ```
 
-### Code Style
-
-**Python:**
-- Follow PEP 8
-- Use type hints where applicable
-- Add docstrings to functions
-- Keep functions focused and small
-
-**Bash:**
-- Use shellcheck for validation
-- Add comments for complex logic
-- Handle errors appropriately
-- Use `set -e` for safety
-
-**Docker:**
-- Minimize layers
-- Use multi-stage builds
-- Clean up in same RUN command
-- Pin versions for reproducibility
-
-### Adding a New Module
-
-1. **Create module manifest:**
-```json
-// modules/manifests/new-module/manifest.json
-{
-  "name": "new-module",
-  "version": "1.0.0",
-  "description": "Description of module",
-  "category": "category-name",
-  "stable_version": "1.0.0",
-  "submodules": ["sub1", "sub2"]
-}
-```
-
-2. **Add to registry:**
-```json
-// modules/registry.json
-"new-module": {
-  "name": "new-module",
-  "version": "1.0.0",
-  ...
-}
-```
-
-3. **Create installation scripts if needed**
-
-4. **Test installation:**
-```bash
-forensics-modules install new-module
-# Verify all tools work
-```
-
-5. **Document:**
-- Add to README.md module list
-- Create module-specific documentation if complex
-
-### Testing
-
-Before submitting:
+Run the local checks:
 
 ```bash
-# Verify container builds
-docker-compose build
-
-# Run health checks
-docker exec forensics-workstation forensics-health check
-
-# Verify audit system
-docker exec forensics-workstation forensics-audit verify
-
-# Test module installation
-docker exec forensics-workstation forensics-modules list
+make lint        # ruff + mypy
+make test        # pytest
+make build       # docker compose build
+make smoke       # spin up + run validate.sh + tear down
 ```
 
-## 📋 Pull Request Process
+## Commit style
 
-1. **Fork the repository**
-2. **Create a feature branch** (`git checkout -b feature/amazing-feature`)
-3. **Make your changes**
-4. **Test thoroughly**
-5. **Commit with clear messages**:
-   ```
-   feat: Add malware analysis module
-   
-   - Adds YARA rules support
-   - Includes radare2 integration
-   - Updates documentation
-   ```
-6. **Push to your fork** (`git push origin feature/amazing-feature`)
-7. **Open a Pull Request**
+[Conventional Commits](https://www.conventionalcommits.org/) — please:
 
-### PR Requirements
+```
+feat(modules): add binwalk submodule to disk-forensics
+fix(audit): handle malformed entries in verify()
+docs(readme): correct memory-forensics size estimate
+```
 
-- [ ] Description explains what and why
-- [ ] Tests pass (if applicable)
-- [ ] Documentation updated
-- [ ] No merge conflicts
-- [ ] Follows code style guidelines
-- [ ] Security considerations addressed
+Keep commits small and focused. PRs that touch >500 LOC almost
+always need rework before merging.
 
-## 🔐 Security
+## Code style
 
-### Reporting Security Vulnerabilities
+- **Python**: ruff for lint, mypy for types. Type annotations
+  required on new public functions.
+- **Bash**: ShellCheck-clean. `set -euo pipefail` mandatory.
+- **YAML**: 2-space indent.
+- **Docs**: 80-character line limit. Markdown files use ATX-style
+  headings (`#`, not underline).
 
-**DO NOT** open public issues for security vulnerabilities.
+## Adding a module
 
-Instead:
-1. Email: security@your-org.com
-2. Include detailed description
-3. Steps to reproduce
-4. Potential impact
-5. Suggested fix (if any)
+See the [Architecture: Extension points](ARCHITECTURE.md#extension-points)
+section. Required for a module PR:
 
-We will respond within 48 hours.
+1. Entry in `modules/registry.json` with `verify` hints for *every*
+   submodule. PRs without verify hints are rejected — installations
+   that we can't verify aren't useful.
+2. Installer functions in `core/forensics/modules/installers.py`.
+3. Removal commands in `REMOVERS` where reasonable.
+4. Documentation update: a row in the README catalogue table.
+5. A test in `tests/test_modules.py` that exercises the registry
+   parsing of the new module.
 
-### Security Best Practices
+## Adding a forensic tool to an existing module
 
-When contributing:
-- Never commit credentials or keys
-- Validate all user inputs
-- Use secure defaults
-- Follow principle of least privilege
-- Document security implications
-- Use up-to-date dependencies
+Smaller change. Required:
 
-## 📜 Code of Conduct
+1. Add the apt/pip/git command to the existing installer function.
+2. Add a verify hint for the new tool.
+3. Update the `tools_overview` in the module registry entry.
+4. Note the change in `CHANGELOG.md`.
 
-### Our Pledge
+## Testing
 
-We are committed to providing a welcoming and inclusive environment for all contributors, regardless of:
-- Experience level
-- Gender identity and expression
-- Sexual orientation
-- Disability
-- Personal appearance
-- Race or ethnicity
-- Age
-- Religion
-- Nationality
+```bash
+pytest -v
+pytest -v -k modules            # only module tests
+pytest --cov=forensics core/    # coverage report
+```
 
-### Expected Behavior
+## Release process
 
-- Be respectful and professional
-- Accept constructive criticism gracefully
-- Focus on what's best for the community
-- Show empathy towards others
-- Use welcoming and inclusive language
+Maintainer-only:
 
-### Unacceptable Behavior
+1. Bump `VERSION`.
+2. Update `CHANGELOG.md` with the new section.
+3. Tag: `git tag -a v3.x.y -m "Release v3.x.y"`.
+4. `docker compose build` and push the image.
+5. GitHub Release notes copied from the changelog section.
 
-- Harassment or discriminatory language
-- Trolling or insulting comments
-- Publishing others' private information
-- Other conduct that would be inappropriate in a professional setting
+## Code of conduct
 
-### Enforcement
-
-Violations may result in:
-1. Warning
-2. Temporary ban
-3. Permanent ban
-
-Report violations to: conduct@your-org.com
-
-## 🎓 Learning Resources
-
-New to forensics? Check out:
-- [NIST SP 800-86](https://csrc.nist.gov/publications/detail/sp/800-86/final)
-- [Digital Forensics Framework](https://www.dff-framework.org/)
-- [SANS Digital Forensics](https://www.sans.org/cyber-security-courses/digital-forensics-essentials/)
-
-New to Docker?
-- [Docker Documentation](https://docs.docker.com/)
-- [Docker Best Practices](https://docs.docker.com/develop/dev-best-practices/)
-
-## 📞 Contact
-
-- **GitHub Issues**: For bugs and features
-- **Discussions**: For questions and ideas
-- **Email**: contribute@your-org.com
-
-## 🏆 Contributors
-
-Contributors will be recognized in:
-- README.md (Contributors section)
-- Release notes
-- GitHub contributors graph
-
-Thank you for making digital forensics more accessible! 🔍
-
----
-
-**Happy Contributing!**
+Be civil, be patient. We assume good faith. Bad-faith comments,
+harassment, or attempts to weaponize the project for unauthorized
+investigations get you instantly banned.

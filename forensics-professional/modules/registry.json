@@ -1,233 +1,255 @@
 {
-  "registry_version": "2.1.0",
-  "last_updated": "2026-03-25T00:00:00Z",
+  "registry_version": "3.0.0",
+  "schema_version": 2,
+  "last_updated": "2026-05-03T00:00:00Z",
   "maintainer": "joao-henrike",
   "github": "https://github.com/joao-henrike/Containers/tree/main/forensics-professional",
   "compliance": "NIST SP 800-86",
-  "description": "Central registry of all available forensics modules",
+  "description": "Registry of forensic tool modules. Sizes are post-install disk usage approximations.",
 
   "categories": {
-    "cloud": "Cloud platform investigation (AWS, Azure, GCP)",
-    "memory": "Memory acquisition and analysis",
-    "disk": "Disk imaging and file carving",
-    "network": "Network traffic capture and analysis",
-    "mobile": "Mobile device forensics (Android, iOS)",
-    "malware": "Malware analysis and reverse engineering",
-    "windows": "Windows artifacts and registry analysis",
-    "linux": "Linux log analysis and ext4 forensics",
+    "cloud":     "Cloud platform investigation (AWS, Azure, GCP)",
+    "memory":    "Memory acquisition and analysis",
+    "disk":      "Disk imaging and file carving",
+    "network":   "Network traffic capture and analysis",
+    "mobile":    "Mobile device forensics (Android, iOS)",
+    "malware":   "Malware analysis and reverse engineering",
+    "windows":   "Windows artifacts and registry analysis",
+    "linux":     "Linux log analysis and ext4 forensics",
     "container": "Docker and Kubernetes forensics",
-    "database": "Database forensics (MySQL, PostgreSQL, MongoDB)",
-    "email": "Email forensics (PST, EML, headers)",
-    "osint": "Open Source Intelligence tools",
-    "threat": "Threat intelligence and IOC feeds",
-    "recon": "Web reconnaissance and subdomain enumeration"
+    "database":  "Database forensics (MySQL, PostgreSQL, MongoDB)",
+    "email":     "Email forensics (PST, EML, headers)",
+    "osint":     "Open-source intelligence tools",
+    "threat":    "Threat intelligence and IOC feeds",
+    "recon":     "Web reconnaissance and subdomain enumeration"
   },
 
   "modules": {
 
     "cloud-forensics": {
-      "version": "1.0.0",
       "stable_version": "1.0.0",
       "category": "cloud",
-      "description": "AWS, Azure, GCP forensic investigation tools",
+      "description": "AWS, Azure, GCP forensic investigation tools.",
       "estimated_size_mb": 900,
-      "tool_count": 15,
-      "dependencies": ["python3", "curl", "wget"],
-      "submodules": ["aws-tools", "azure-tools", "gcp-tools", "generic-cloud"],
-      "install_all_by_default": true,
-      "tools_overview": ["aws-cli", "boto3", "azure-cli", "gcloud-sdk", "cloudmapper", "scoutsuite", "prowler"]
+      "tool_count": 12,
+      "dependencies": ["python3", "curl", "unzip"],
+      "submodules": [
+        { "name": "aws-tools",     "verify": ["aws", "py:boto3"] },
+        { "name": "azure-tools",   "verify": ["az", "py:azure.identity"] },
+        { "name": "gcp-tools",     "verify": ["gcloud"] },
+        { "name": "generic-cloud", "verify": ["py:ScoutSuite"] }
+      ],
+      "tools_overview": ["aws-cli", "boto3", "azure-cli", "gcloud-sdk", "scoutsuite", "prowler"]
     },
 
     "memory-forensics": {
-      "version": "2.1.0",
-      "stable_version": "2.1.0",
+      "stable_version": "3.0.0",
       "category": "memory",
-      "description": "Volatility 3, LiME memory acquisition, AVML",
-      "estimated_size_mb": 755,
-      "tool_count": 8,
+      "description": "Volatility 3 + LiME memory acquisition + AVML.",
+      "estimated_size_mb": 480,
+      "tool_count": 5,
       "dependencies": ["python3", "git"],
-      "submodules": ["volatility", "rekall", "lime", "avml"],
-      "install_all_by_default": true,
-      "known_issues": {
-        "rekall": "pip3 install rekall fails on Python 3.10 — skipped automatically, use Volatility3 instead"
-      },
-      "tools_overview": ["volatility3", "volatility2", "lime", "avml"]
+      "submodules": [
+        { "name": "volatility", "verify": ["py:volatility3", "vol"], "notes": "Volatility 3 (Python 3 native)" },
+        { "name": "lime",       "verify": ["file:/tmp/LiME/src/lime.ko"], "notes": "Built from source; kernel-version dependent" },
+        { "name": "avml",       "verify": ["avml"], "notes": "Microsoft AVML — pre-built binary" }
+      ],
+      "tools_overview": ["volatility3", "lime", "avml"]
     },
 
     "disk-forensics": {
-      "version": "1.0.0",
-      "stable_version": "1.0.0",
+      "stable_version": "1.1.0",
       "category": "disk",
-      "description": "Disk imaging, file carving, filesystem analysis",
-      "estimated_size_mb": 1024,
+      "description": "Disk imaging, file carving, filesystem analysis.",
+      "estimated_size_mb": 220,
       "tool_count": 12,
-      "dependencies": ["python3"],
-      "submodules": ["sleuthkit", "autopsy", "testdisk", "foremost", "scalpel"],
-      "install_all_by_default": true,
-      "tools_overview": ["sleuthkit", "autopsy", "testdisk", "photorec", "foremost", "scalpel", "dcfldd"]
+      "dependencies": [],
+      "submodules": [
+        { "name": "sleuthkit", "verify": ["fls", "icat", "mmls"] },
+        { "name": "testdisk",  "verify": ["testdisk", "photorec"] },
+        { "name": "foremost",  "verify": ["foremost"] },
+        { "name": "scalpel",   "verify": ["scalpel"] }
+      ],
+      "tools_overview": ["sleuthkit", "testdisk", "photorec", "foremost", "scalpel", "dcfldd", "ddrescue"]
     },
 
     "network-forensics": {
-      "version": "1.0.0",
       "stable_version": "1.0.0",
       "category": "network",
-      "description": "Packet capture, analysis, and traffic reconstruction",
+      "description": "Packet capture, analysis, traffic reconstruction.",
       "estimated_size_mb": 740,
-      "tool_count": 10,
+      "tool_count": 7,
       "dependencies": ["libpcap-dev"],
-      "submodules": ["wireshark", "zeek", "tcpdump", "ngrep"],
-      "install_all_by_default": true,
-      "tools_overview": ["tshark", "wireshark", "zeek", "tcpdump", "ngrep", "tcpflow"]
+      "submodules": [
+        { "name": "wireshark", "verify": ["tshark"] },
+        { "name": "zeek",      "verify": ["zeek"] },
+        { "name": "tcpdump",   "verify": ["tcpdump"] },
+        { "name": "ngrep",     "verify": ["ngrep", "tcpflow"] }
+      ],
+      "tools_overview": ["tshark", "zeek", "tcpdump", "ngrep", "tcpflow"]
     },
 
     "mobile-forensics": {
-      "version": "1.0.0",
       "stable_version": "1.0.0",
       "category": "mobile",
-      "description": "Android and iOS device forensics",
+      "description": "Android and iOS device forensics.",
       "estimated_size_mb": 580,
-      "tool_count": 8,
+      "tool_count": 6,
       "dependencies": ["default-jdk", "sqlite3"],
-      "submodules": ["android-tools", "ios-tools", "backup-extractors"],
-      "install_all_by_default": true,
-      "known_issues": {
-        "backup-extractors": "android-backup-extractor not on PyPI — uses ABE JAR compiled from source (nelenkov/android-backup-extractor). Requires git clone + gradle build."
-      },
-      "tools_overview": [
-        "adb", "fastboot", "libimobiledevice",
-        "jadx", "frida", "androguard",
-        "abe (android-backup-extractor)"
-      ]
+      "submodules": [
+        { "name": "android-tools",     "verify": ["adb", "fastboot", "py:androguard"] },
+        { "name": "ios-tools",         "verify": ["idevice_id", "ideviceinfo"] },
+        { "name": "backup-extractors", "verify": ["file:/opt/forensics/tools/abe.jar"], "notes": "Compiled from nelenkov/android-backup-extractor via gradle" }
+      ],
+      "tools_overview": ["adb", "fastboot", "libimobiledevice", "androguard", "abe (android-backup-extractor)"]
     },
 
     "malware-analysis": {
-      "version": "1.0.0",
-      "stable_version": "1.0.0",
+      "stable_version": "1.1.0",
       "category": "malware",
-      "description": "YARA, radare2/rizin, Ghidra, ClamAV, CAPEv2",
+      "description": "YARA, radare2, Ghidra, ClamAV.",
       "estimated_size_mb": 2048,
-      "tool_count": 15,
-      "dependencies": ["python3", "default-jdk"],
-      "submodules": ["yara", "radare2", "ghidra", "clamav"],
-      "install_all_by_default": true,
-      "notes": "Cuckoo replaced by CAPEv2 (modern fork, Python 3 compatible)",
-      "tools_overview": ["yara", "yara-python", "rizin", "ghidra", "clamav", "capev2"]
+      "tool_count": 12,
+      "dependencies": ["default-jdk"],
+      "submodules": [
+        { "name": "yara",    "verify": ["yara", "py:yara"] },
+        { "name": "radare2", "verify": ["r2"] },
+        { "name": "ghidra",  "verify": ["file:/opt/forensics/tools/ghidra"], "notes": "Large download (~400 MB)" },
+        { "name": "clamav",  "verify": ["clamscan", "freshclam"], "notes": "Initial freshclam can take several minutes" }
+      ],
+      "tools_overview": ["yara", "yara-python", "radare2", "ghidra", "clamav"]
     },
 
     "windows-forensics": {
-      "version": "1.0.0",
       "stable_version": "1.0.0",
       "category": "windows",
-      "description": "Windows Registry, Event Logs, Prefetch, Timeline",
+      "description": "Windows registry, event logs, prefetch, timeline.",
       "estimated_size_mb": 590,
-      "tool_count": 10,
-      "dependencies": ["python3", "software-properties-common"],
-      "submodules": ["regripper", "plaso", "evtx-parser", "prefetch-parser"],
-      "install_all_by_default": true,
-      "notes": "Plaso (log2timeline) requires add-apt-repository (software-properties-common)",
-      "tools_overview": ["regripper", "plaso", "python-evtx", "prefetch-parser"]
+      "tool_count": 8,
+      "dependencies": ["software-properties-common"],
+      "submodules": [
+        { "name": "regripper",       "verify": ["file:/opt/forensics/tools/regripper/rip.pl"] },
+        { "name": "plaso",           "verify": ["log2timeline.py", "psort.py"], "notes": "Requires PPA gift/stable" },
+        { "name": "evtx-parser",     "verify": ["py:Evtx"] },
+        { "name": "prefetch-parser", "verify": ["py:prefetch"] }
+      ],
+      "tools_overview": ["regripper", "plaso (log2timeline)", "python-evtx", "prefetch-parser"]
     },
 
     "linux-forensics": {
-      "version": "1.0.0",
       "stable_version": "1.0.0",
       "category": "linux",
-      "description": "Linux log analysis, auditd, ext4 recovery",
+      "description": "Linux log analysis, auditd, ext4 recovery.",
       "estimated_size_mb": 315,
-      "tool_count": 8,
-      "dependencies": ["python3"],
-      "submodules": ["auditd-tools", "log-parsers", "ext4-tools"],
-      "install_all_by_default": true,
-      "tools_overview": ["auditd", "aureport", "ausearch", "logwatch", "extundelete", "ext4magic"]
+      "tool_count": 6,
+      "dependencies": [],
+      "submodules": [
+        { "name": "auditd-tools", "verify": ["auditctl", "ausearch", "aureport"] },
+        { "name": "log-parsers",  "verify": ["logwatch", "goaccess"] },
+        { "name": "ext4-tools",   "verify": ["debugfs", "extundelete"] }
+      ],
+      "tools_overview": ["auditd", "aureport", "ausearch", "logwatch", "extundelete"]
     },
 
     "container-forensics": {
-      "version": "1.0.0",
       "stable_version": "1.0.0",
       "category": "container",
-      "description": "Docker and Kubernetes forensic investigation",
+      "description": "Docker and Kubernetes forensic investigation.",
       "estimated_size_mb": 430,
-      "tool_count": 6,
-      "dependencies": ["python3", "curl"],
-      "submodules": ["docker-forensics", "kubernetes-tools"],
-      "install_all_by_default": true,
-      "tools_overview": ["dive", "docker-explorer", "kubectl", "k9s", "kubeshark", "kube-hunter"]
+      "tool_count": 4,
+      "dependencies": ["curl"],
+      "submodules": [
+        { "name": "docker-forensics", "verify": ["dive"] },
+        { "name": "kubernetes-tools", "verify": ["kubectl"] }
+      ],
+      "tools_overview": ["dive", "kubectl"]
     },
 
     "database-forensics": {
-      "version": "1.0.0",
       "stable_version": "1.0.0",
       "category": "database",
-      "description": "MySQL, PostgreSQL, MongoDB forensic recovery",
+      "description": "MySQL, PostgreSQL, MongoDB forensic recovery.",
       "estimated_size_mb": 650,
-      "tool_count": 9,
-      "dependencies": ["python3"],
-      "submodules": ["mysql-tools", "postgresql-tools", "mongodb-tools"],
-      "install_all_by_default": true,
-      "tools_overview": ["mysqlbinlog", "mysql-client", "pg_dump", "mongodump", "sqlite3"]
+      "tool_count": 6,
+      "dependencies": [],
+      "submodules": [
+        { "name": "mysql-tools",      "verify": ["mysql"] },
+        { "name": "postgresql-tools", "verify": ["psql"] },
+        { "name": "mongodb-tools",    "verify": ["py:pymongo"] }
+      ],
+      "tools_overview": ["mysql-client", "postgresql-client", "pymongo", "sqlite3"]
     },
 
     "email-forensics": {
-      "version": "1.0.0",
       "stable_version": "1.0.0",
       "category": "email",
-      "description": "PST/OST parsing, EML analysis, header investigation",
+      "description": "PST/OST parsing, EML analysis, header investigation.",
       "estimated_size_mb": 260,
-      "tool_count": 7,
-      "dependencies": ["python3", "libpst-dev"],
-      "submodules": ["pst-parser", "eml-parser", "header-analyzer"],
-      "install_all_by_default": true,
-      "tools_overview": ["readpst", "libpst", "emlAnalyzer", "email-header-analyzer"]
+      "tool_count": 6,
+      "dependencies": [],
+      "submodules": [
+        { "name": "pst-parser",      "verify": ["readpst"] },
+        { "name": "eml-parser",      "verify": ["py:eml_parser"] },
+        { "name": "header-analyzer", "verify": ["py:mailparser"] }
+      ],
+      "tools_overview": ["readpst", "libpst", "eml-parser", "mail-parser"]
     },
 
     "osint-tools": {
-      "version": "1.0.0",
       "stable_version": "1.0.0",
       "category": "osint",
-      "description": "Social media OSINT, email verification, phone lookup",
+      "description": "Social-media OSINT, email verification, domain & phone recon.",
       "estimated_size_mb": 450,
-      "tool_count": 25,
-      "dependencies": ["python3", "git"],
-      "submodules": ["social-media", "email-osint", "domain-recon", "phone-osint"],
-      "install_all_by_default": true,
-      "tools_overview": ["sherlock", "holehe", "theHarvester", "phoneinfoga", "maigret"]
+      "tool_count": 8,
+      "dependencies": ["git"],
+      "submodules": [
+        { "name": "social-media", "verify": ["sherlock", "maigret"] },
+        { "name": "email-osint",  "verify": ["holehe"] },
+        { "name": "domain-recon", "verify": ["theHarvester", "amass"] },
+        { "name": "phone-osint",  "verify": ["file:/opt/forensics/tools/phoneinfoga"] }
+      ],
+      "tools_overview": ["sherlock", "maigret", "holehe", "theHarvester", "amass", "phoneinfoga"]
     },
 
     "threat-intelligence": {
-      "version": "1.0.0",
       "stable_version": "1.0.0",
       "category": "threat",
-      "description": "IOC feeds, MISP, OpenCTI, threat hunting (Sigma, Hayabusa)",
+      "description": "IOC feeds, MISP, OpenCTI, threat-hunting (Sigma).",
       "estimated_size_mb": 320,
-      "tool_count": 15,
-      "dependencies": ["python3"],
-      "submodules": ["ioc-feeds", "threat-hunting", "misp-integration", "opencti-tools"],
-      "install_all_by_default": true,
-      "known_issues": {
-        "hayabusa": "wget download URL for v2.17.0 may fail — use latest release from github.com/Yamato-Security/hayabusa"
-      },
-      "tools_overview": ["pymisp", "OTXv2", "sigma-cli", "pysigma", "hayabusa", "opencti"]
+      "tool_count": 6,
+      "dependencies": [],
+      "experimental": true,
+      "submodules": [
+        { "name": "ioc-feeds",        "verify": ["py:pymisp", "py:OTXv2"] },
+        { "name": "threat-hunting",   "verify": ["py:sigma"], "notes": "sigma-cli + pysigma" },
+        { "name": "misp-integration", "verify": ["py:pymisp"] },
+        { "name": "opencti-tools",    "verify": ["py:pycti"] }
+      ],
+      "tools_overview": ["pymisp", "OTXv2", "sigma-cli", "pysigma", "pycti"]
     },
 
     "web-recon": {
-      "version": "1.0.0",
       "stable_version": "1.0.0",
       "category": "recon",
-      "description": "Subdomain enumeration, web scraping, DNS recon",
+      "description": "Subdomain enumeration, web scraping, DNS recon.",
       "estimated_size_mb": 280,
-      "tool_count": 18,
-      "dependencies": ["python3", "git"],
-      "submodules": ["subdomain-enum", "web-scraping", "dns-recon"],
-      "install_all_by_default": true,
-      "tools_overview": ["amass", "subfinder", "httpx", "waybackurls", "gobuster", "ffuf"]
+      "tool_count": 6,
+      "dependencies": ["git"],
+      "submodules": [
+        { "name": "subdomain-enum", "verify": ["subfinder"] },
+        { "name": "web-scraping",   "verify": ["py:scrapy", "py:bs4"] },
+        { "name": "dns-recon",      "verify": ["dnsrecon", "dnsenum"] }
+      ],
+      "tools_overview": ["subfinder", "scrapy", "beautifulsoup4", "dnsrecon", "dnsenum"]
     }
   },
 
   "total_stats": {
     "total_modules": 14,
-    "total_tools": 161,
-    "total_size_all_modules_mb": 9372,
-    "base_image_mb": 810,
-    "total_with_base_mb": 10182
+    "total_tools": 104,
+    "total_size_all_modules_mb": 8263,
+    "base_image_mb": 850,
+    "total_with_base_mb": 9113,
+    "comment": "Sizes are post-install disk usage approximations on Ubuntu 22.04. Actual values vary with apt cache state and binary versions."
   }
 }

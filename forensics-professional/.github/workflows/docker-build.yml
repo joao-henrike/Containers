@@ -1,61 +1,168 @@
-name: Docker Build & Security Scan
+name: Build & Test
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
     paths:
       - 'forensics-professional/**'
   pull_request:
-    branches: [ main ]
+    branches: [main]
+    paths:
+      - 'forensics-professional/**'
+  workflow_dispatch:
 
 defaults:
   run:
+    shell: bash
     working-directory: forensics-professional
 
-jobs:
-  build-and-test:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+env:
+  IMAGE_NAME: forensics-professional
 
-      - name: Set up Docker Buildx
+jobs:
+  # ── Lint & type-check (fast, runs on all pushes) ─────────────────────────
+  lint:
+    name: Lint & type-check
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: forensics-professional/requirements-dev.txt
+
+      - name: Install dev dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Ruff
+        run: ruff check core/ tests/
+
+      - name: Mypy
+        run: mypy core/forensics
+
+  # ── Unit tests (host-side, mocks Docker) ─────────────────────────────────
+  test:
+    name: Unit tests
+    runs-on: ubuntu-22.04
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: forensics-professional/requirements-dev.txt
+
+      - name: Install dev dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run pytest
+        run: pytest -v --cov=forensics --cov-report=xml
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        if: success()
+        with:
+          file: forensics-professional/coverage.xml
+          fail_ci_if_error: false
+
+  # ── Docker build + integration smoke test ────────────────────────────────
+  build:
+    name: Docker build & smoke
+    runs-on: ubuntu-22.04
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build Docker image
-        run: |
-          docker compose build --no-cache
+      - name: Read VERSION
+        id: ver
+        run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: forensics-professional
+          file: forensics-professional/Dockerfile
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:${{ steps.ver.outputs.version }}
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
 
       - name: Start container
         run: |
           docker compose up -d
-          sleep 10
+          # wait for healthcheck
+          for i in $(seq 1 30); do
+            status=$(docker inspect -f '{{.State.Health.Status}}' \
+                       forensics-workstation 2>/dev/null || echo starting)
+            echo "[$i] health=$status"
+            [[ "$status" == "healthy" ]] && break
+            sleep 2
+          done
+          [[ "$status" == "healthy" ]]
 
-      - name: Health check
+      - name: Run smoke tests
         run: |
-          docker exec forensics-workstation forensics-health quick-check
+          docker compose exec -T forensics \
+            /opt/forensics/bin/validate.sh
 
-      - name: Audit verification
+      - name: Audit log integrity
         run: |
-          docker exec forensics-workstation forensics-audit verify
+          docker compose exec -T forensics \
+            forensics-audit verify
 
-      - name: Module list test
+      - name: Module list
         run: |
-          docker exec forensics-workstation forensics-modules list
-
-      - name: Run validation script
-        run: |
-          docker exec forensics-workstation \
-            /opt/forensics/scripts/validation-scripts/FBI_VALIDATION_CLEAN.sh
-
-      - name: Security scan (Trivy)
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: 'forensics-professional:v2.1.0-FINAL'
-          format: 'table'
-          exit-code: '0'
-          severity: 'CRITICAL,HIGH'
+          docker compose exec -T forensics \
+            forensics-modules list
 
       - name: Stop container
         if: always()
         run: docker compose down
+
+  # ── Security scan (vulnerability baseline) ───────────────────────────────
+  security-scan:
+    name: Trivy vulnerability scan
+    runs-on: ubuntu-22.04
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Read VERSION
+        id: ver
+        run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Build image (cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: forensics-professional
+          file: forensics-professional/Dockerfile
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:${{ steps.ver.outputs.version }}
+          cache-from: type=gha
+
+      - name: Run Trivy
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: '${{ env.IMAGE_NAME }}:${{ steps.ver.outputs.version }}'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'   # report only; don't fail build on findings yet
+
+      - name: Upload Trivy results to Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'forensics-professional/trivy-results.sarif'

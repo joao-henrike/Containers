@@ -1,234 +1,96 @@
-# Quick Start Guide - Professional Forensics Container
+# Quickstart
 
-Get started in under 5 minutes!
+> **Goal:** from a fresh clone to your first analyzed memory dump in
+> under 15 minutes.
 
-## ⚡ Prerequisites
-
-- Docker 20.10+ installed
-- Docker Compose 1.29+ installed
-- 8GB RAM minimum (16GB recommended)
-- 50GB free disk space
-
-## 🚀 Installation
-
-### 1. Build the Container (2 minutes)
+## 1. Clone and build (5 min)
 
 ```bash
-cd forensics-professional
-docker-compose build
+git clone https://github.com/joao-henrike/Containers.git
+cd Containers/forensics-professional
+docker compose build
+docker compose up -d
+docker compose exec forensics bash
 ```
 
-### 2. Start the Container (30 seconds)
+## 2. Verify the environment (30 s)
 
 ```bash
-docker-compose up -d
+forensics-health
 ```
 
-### 3. Access the Shell (instant)
+Expect every probe to be ✓ except **ML-DSA-65 keypair** (warns until
+you generate it; this is fine for normal use).
+
+## 3. Install a module (2–3 min)
 
 ```bash
-docker exec -it forensics-workstation bash
+forensics-modules install memory-forensics --only volatility -y
 ```
 
-You'll see the professional forensics banner!
+Output streams in real time. You'll see `apt-get` and `pip` calls. When
+it's done you'll see:
 
-## 🎯 First Steps Inside the Container
+```
+✓  memory-forensics: 1/1 OK
+```
 
-### Verify System Health
+## 4. Acquire some evidence
+
+For this walk-through, grab a small public memory image:
 
 ```bash
-forensics-health check
+cd /cases
+mkdir tutorial && cd tutorial
+curl -L -o win7.vmem.lzma \
+    https://downloads.volatilityfoundation.org/volatility3/images/win-10.lzma
+unxz win7.vmem.lzma
 ```
 
-Expected output:
-```
-✅ Evidence directory: OK
-✅ Cases directory: OK
-✅ Cryptographic keys: OK
-✅ Audit log: IMMUTABLE
-✅ CPU cores: 8
-✅ Memory: 16.0GB total, 12.5GB available
+Real evidence would arrive on a write-blocked drive and be mounted at
+`/evidence` (read-only).
+
+## 5. Analyse it
+
+```bash
+vol -f win7.vmem windows.info
+vol -f win7.vmem windows.pslist
+vol -f win7.vmem windows.netscan
 ```
 
-### Check Audit Log
+Each `vol` call is auto-logged. Confirm:
+
+```bash
+forensics-audit show --event-type command_executed --limit 10
+```
+
+## 6. Verify the audit chain
 
 ```bash
 forensics-audit verify
 ```
 
-Expected output:
+Expect:
+
 ```
-🔍 Verifying audit log integrity...
-✅ VALID: Verified 1 entries successfully
+STATUS: VALID
+Hash chain intact, signatures verified.
 ```
 
-### List Available Modules
+## 7. Export for handover
 
 ```bash
-forensics-modules list
+forensics-audit export \
+    --output /reports/case-tutorial-audit.jsonl \
+    --format jsonl
 ```
 
-You'll see all 11 available forensic tool modules.
+Hand that file to whatever long-term storage your organisation uses
+(S3 Object Lock, etc.).
 
-### Install Your First Module
+## What now?
 
-```bash
-# Example: Install disk forensics tools
-forensics-modules install disk-forensics
-```
-
-This installs: sleuthkit, autopsy, testdisk, foremost, scalpel
-
-## 📁 Working with Evidence
-
-### Add Evidence (on host machine)
-
-```bash
-# Copy your evidence to the evidence directory
-cp /path/to/disk.img forensics-professional/evidence/
-```
-
-### Access Evidence (inside container)
-
-```bash
-# Evidence is at /evidence (read-only)
-ls /evidence
-
-# Try to delete (will fail - protected!)
-rm /evidence/disk.img
-# Permission denied: Evidence is immutable
-```
-
-## 🔬 Start Analyzing
-
-### Create Case Working Directory
-
-```bash
-# Inside container
-cd /cases
-mkdir CASE-2026-001
-cd CASE-2026-001
-```
-
-### Hash Evidence
-
-```bash
-# Compute hashes
-sha256sum /evidence/disk.img > disk.img.sha256
-
-# This action is logged in audit trail
-forensics-audit show --limit 5
-```
-
-### Analyze with Installed Tools
-
-```bash
-# If you installed disk-forensics:
-mmls /evidence/disk.img           # List partitions
-fls -r /evidence/disk.img          # List files
-icat /evidence/disk.img 128 > file.txt  # Extract file
-```
-
-## 📊 View Audit Trail
-
-```bash
-# Show recent actions
-forensics-audit show
-
-# Show statistics
-forensics-audit stats
-
-# Export for reporting
-forensics-audit export --output audit.json
-```
-
-## 🔧 Troubleshooting
-
-### Container won't start
-
-```bash
-# Check Docker status
-docker ps -a
-
-# View logs
-docker-compose logs
-
-# Rebuild
-docker-compose down
-docker-compose build --no-cache
-docker-compose up -d
-```
-
-### Permission issues
-
-```bash
-# Inside container
-whoami
-# Should output: sherlock
-
-# Check evidence is protected
-ls -la /evidence
-# Should show root:forensics-ro and read-only
-```
-
-### Module installation fails
-
-```bash
-# Check system health
-forensics-health check
-
-# Try again with verbose output
-forensics-modules install disk-forensics
-```
-
-## 📖 Next Steps
-
-- Read full [README.md](README.md)
-- Install more modules as needed
-- Explore modular sub-module installation
-- Set up automated workflows
-
-## 💡 Pro Tips
-
-1. **Install only what you need** - keeps container lean
-2. **Always verify audit log** - `forensics-audit verify`
-3. **Use parallel cores** - analysis is multi-threaded by default
-4. **Evidence is protected** - you cannot delete it (by design)
-5. **Everything is logged** - check `forensics-audit show`
-
-## 🎓 Example Workflow
-
-```bash
-# 1. Start container
-docker-compose up -d
-docker exec -it forensics-workstation bash
-
-# 2. Install tools
-forensics-modules install disk-forensics memory-forensics
-
-# 3. Navigate to cases
-cd /cases/CASE-001
-
-# 4. Analyze evidence
-mmls /evidence/suspect.img
-fls -r /evidence/suspect.img > filelist.txt
-
-# 5. Check audit trail
-forensics-audit show
-
-# 6. Generate report
-# (create report manually or use forensics-report when implemented)
-```
-
-## ⚠️ Remember
-
-- All actions are logged (immutable audit trail)
-- Evidence cannot be deleted or modified
-- Modules install from internet (ensure connectivity)
-- Root access is encrypted (owner only)
-
----
-
-**Ready to investigate!** 🔍
-
-For help: Run any command with `--help`
+- [Full module catalogue](README.md#module-catalogue)
+- [Detailed example: a real case](docs/examples/first-case.md)
+- [Architecture overview](ARCHITECTURE.md)
+- [Threat model](SECURITY.md)

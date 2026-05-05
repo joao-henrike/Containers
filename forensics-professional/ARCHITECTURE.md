@@ -1,494 +1,218 @@
-# Architecture Documentation
+# Architecture
 
-## System Overview
+This document explains how the pieces fit together and why each one
+exists. If you only want to use the container, [`README.md`](README.md)
+and [`QUICKSTART.md`](QUICKSTART.md) are enough. Read this when you want
+to extend it or audit it.
 
-Professional Forensics Container v2.0.0 is a modular, security-hardened digital forensics environment built on:
-
-- **Base OS**: Ubuntu 22.04 LTS
-- **Cryptography**: Post-Quantum (liboqs), Ed25519, GPG
-- **Architecture**: Multi-stage Docker build
-- **Compliance**: NIST SP 800-86
-- **License**: MIT
-
-## Security Model
-
-### User Hierarchy
+## Map of the territory
 
 ```
-┌─────────────────────────────────────┐
-│ ROOT (PQC Encrypted)                │
-│ - Post-quantum cryptography         │
-│ - Owner only (private key required) │
-│ - Full system access                │
-└─────────────────────────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────────┐
-│ SHERLOCK (Public User)              │
-│ - UID 1000                          │
-│ - Full forensic capabilities        │
-│ - CANNOT: delete evidence           │
-│ - CANNOT: modify audit logs         │
-│ - CANNOT: escalate to root          │
-└─────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                         Docker host                              │
+│                                                                  │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │              forensics-workstation (container)             │  │
+│  │                                                            │  │
+│  │  ┌──────────────────┐    ┌──────────────────┐              │  │
+│  │  │ Bash shell       │───▶│ bash-hooks.sh    │              │  │
+│  │  │ (sherlock)       │    │ (DEBUG trap)     │              │  │
+│  │  └──────────────────┘    └────────┬─────────┘              │  │
+│  │           │                       │                        │  │
+│  │           ▼                       ▼                        │  │
+│  │  ┌──────────────────┐    ┌──────────────────┐              │  │
+│  │  │ forensics-       │    │ forensics.chain  │              │  │
+│  │  │   modules CLI    │    │   .logger        │              │  │
+│  │  └────────┬─────────┘    └────────┬─────────┘              │  │
+│  │           │                       │                        │  │
+│  │           ▼                       │                        │  │
+│  │  ┌──────────────────┐             │                        │  │
+│  │  │ ModuleManager    │             │                        │  │
+│  │  │  - install       │             │                        │  │
+│  │  │  - remove        │             │                        │  │
+│  │  │  - verify        │             │                        │  │
+│  │  └────────┬─────────┘             │                        │  │
+│  │           │                       │                        │  │
+│  │           ▼                       ▼                        │  │
+│  │  ┌────────────────────────────────────────────┐            │  │
+│  │  │      forensics.audit.AuditLogger           │            │  │
+│  │  │      (Ed25519-signed, hash-chained)        │            │  │
+│  │  └────────────────┬───────────────────────────┘            │  │
+│  │                   ▼                                        │  │
+│  │  ┌────────────────────────────────────────────┐            │  │
+│  │  │  /var/log/forensics/audit.log  (chattr +a) │            │  │
+│  │  └────────────────────────────────────────────┘            │  │
+│  │                                                            │  │
+│  └────────────────────────────────────────────────────────────┘  │
+│                                                                  │
+│  Bind mounts: ./evidence (ro)  ./cases  ./logs  ./keys  ./reports│
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-### Evidence Protection
+## Lifecycles
 
-```
-/evidence (mounted read-only)
-├── Ownership: root:forensics-ro
-├── Permissions: 750 (rwxr-x---)
-├── sherlock: read access via forensics-ro group
-└── Deletion/modification: BLOCKED
+### Container start
 
-Attempts to modify trigger:
-→ audit log entry (violation attempt)
-→ operation fails
-→ forensics-audit show displays attempt
-```
+1. `tini` (PID 1) execs `docker-entrypoint.sh` as root.
+2. Entrypoint creates log directories, generates Ed25519 + GPG keys
+   (only on first boot), bootstraps the audit-log genesis entry, marks
+   the log append-only, and writes `/home/sherlock/.bashrc`.
+3. Entrypoint records a `container_started` audit event.
+4. Entrypoint exec's `gosu sherlock <CMD>`. The default CMD is `bash`.
+5. Bash sources `.bashrc`, which sources `bash-hooks.sh`.
+6. The DEBUG trap and PROMPT_COMMAND are now armed.
 
-### Audit Log Protection
+### A user runs a command
 
-```
-/var/log/forensics/audit.log
-├── Attribute: chattr +a (append-only)
-├── Even root cannot modify past entries
-├── Each entry:
-│   ├── Linked to previous (blockchain-like)
-│   ├── Signed with Ed25519
-│   ├── Signed with GPG
-│   └── SHA-256 hash
-└── Verification: forensics-audit verify
-```
+1. Bash fires the DEBUG trap → `__forensics_preexec` records
+   `BASH_COMMAND`, start time, cwd, tty.
+2. The command runs as usual.
+3. Before drawing the next prompt, Bash runs `__forensics_precmd`,
+   which spawns a backgrounded subshell:
 
-## Cryptographic Systems
+   ```bash
+   ( FORENSICS_CMD=… python3 -m forensics.chain.logger post & )
+   disown
+   ```
+4. The subshell calls `record_command()`. After the noise filter,
+   the command becomes a `command_executed` audit event.
+5. The audit logger acquires its in-process lock, computes the next
+   hash, signs with Ed25519, and appends with `os.write(O_APPEND)`.
 
-### Post-Quantum Cryptography (Root Protection)
+This is fire-and-forget: the analyst's prompt returns immediately.
 
-**Library**: liboqs (Open Quantum Safe)
-**Algorithms**:
-- Key Encapsulation: Kyber (NIST standardized)
-- Digital Signatures: Dilithium (NIST standardized)
+### A module install
 
-**Purpose**: Protect root access from quantum computer attacks
+1. `forensics-modules install memory-forensics --only volatility`
+2. CLI loads `Registry`, looks up the module spec, and prints the plan.
+3. After confirmation, ModuleManager:
+   - Records a `module_install_started` audit event.
+   - Computes the idempotency partition: which submodules already pass
+     their verifier hints (skipped) vs which need work.
+   - For each remaining submodule:
+     - Calls the corresponding installer function from
+       `forensics.modules.installers.INSTALLERS`.
+     - Streams sub-process output to both stdout and a per-install log
+       file under `/var/log/forensics/installations/`.
+     - Re-runs the verifier — only "verifier passes" counts as
+       installed.
+     - Records a per-submodule audit event.
+   - Writes the manifest to `modules/installed/<name>.json` with a
+     SHA-256 digest of the entry.
+   - Records a `module_install_finished` audit event.
 
-### Hybrid Signature System (Audit Logs)
+### `quantum-root`
 
-**Primary**: Ed25519 (modern, fast, secure)
-- Key size: 32 bytes
-- Signature size: 64 bytes
-- Speed: ~70,000 signatures/sec
+1. `quantum-root` is the shell wrapper; it shows the banner and execs
+   `python3 -m forensics.quantum.auth`.
+2. The Python module:
+   - Refuses immediately if `liboqs` or the keypair is missing.
+   - Prompts for the passphrase.
+   - Decrypts the private key with AES-256-GCM (Argon2id-derived key).
+   - Generates a random 32-byte challenge.
+   - Signs it with the decrypted key (ML-DSA-65).
+   - Verifies the signature against the public key.
+   - Logs success or specific failure mode.
+3. The shell wrapper exec's `sudo -i` on success, exits non-zero
+   otherwise.
 
-**Secondary**: GPG/RSA 4096 (compatibility, legal standards)
-- Key size: 4096 bits
-- Widely accepted in legal contexts
-- Interoperable with existing tools
+## Why each piece exists
 
-**Why Hybrid?**
-- Ed25519: Modern cryptography, performance
-- GPG: Legal acceptability, compatibility
-- Both: Defense in depth
+### Why a Python package, not loose scripts?
 
-### Chain of Custody (Blockchain-like)
+The original project had ~15 standalone scripts in different languages
+that interpreted the same data structures slightly differently. A single
+typo in a category name caused silent skips. The Python package gives
+one source of truth: the registry is parsed once into typed dataclasses
+and shared by all CLIs. Name typos are caught at load time.
 
-```json
-Entry N-1:
-{
-  "seq": 100,
-  "hash": "abc123...",
-  "..."
-}
+### Why `gosu` instead of `su`?
 
-Entry N:
-{
-  "seq": 101,
-  "prev_hash": "abc123...",  ← Links to Entry N-1
-  "hash": "def456...",
-  "signatures": {
-    "ed25519": "...",
-    "gpg": "..."
-  }
-}
-```
+`su` re-executes a login shell, which alters the environment in ways
+that matter for analyst tools (PATH, PYTHONPATH, etc.). It also doesn't
+forward signals reliably. `gosu` is the standard pick: it's a static
+Go binary that does *exactly* what `setuid; setgid; setgroups; exec`
+would do — nothing more.
 
-**Properties**:
-- Tamper-evident: changing any entry breaks the chain
-- Verifiable: forensics-audit verify checks entire chain
-- Immutable: chattr +a prevents modification
+### Why the package up front, with the CLIs as wrappers?
 
-## Module System
+CLIs are trivially testable when they wrap a library: you can call
+`ModuleManager().install(...)` from a unit test without spawning a
+subprocess. The opposite — putting logic in the CLI — leaves you no
+seam for tests at all.
 
-### Architecture
+### Why per-submodule verifier hints?
 
-```
-Module Registry (JSON)
-├── Central registry of all modules
-├── Metadata: version, submodules, size
-└── Stable version tracking
+In the previous version, "module installed" meant "marker file
+exists". A failed install that wrote the marker anyway looked
+identical to a real install. The verifier checks for the *evidence*
+that the install worked — `which volatility3`, `import yara`, etc.
+This also makes `repair` possible: rerun only the submodules whose
+hints currently fail.
 
-Module Manager (Python)
-├── forensics-modules CLI
-├── Parallel installation
-├── Conflict detection
-├── Audit logging
-└── Sub-module selection
+### Why streaming subprocess output?
 
-Module Structure:
-cloud-forensics/
-├── manifest.json (metadata)
-├── submodules/
-│   ├── aws-tools.json
-│   ├── azure-tools.json
-│   └── gcp-tools.json
-└── install scripts
-```
+Most installs touch the network for hundreds of MB. Buffering until
+`subprocess.run()` returns means a 10-minute wait with no feedback,
+during which the user assumes it's hung and Ctrl-C's. Streaming via
+`Popen` lets us write each line to both stdout and the install log as
+it happens.
 
-### Installation Flow
+### Why a SHA-256 digest in each manifest?
 
-```
-User runs: forensics-modules install cloud-forensics --only aws-tools
+The manifest itself can be tampered with. The digest is computed over
+the canonical JSON of the rest of the manifest. Combined with the
+audit log's own hash chain, this gives a cross-check: the audit log
+says "module X installed at T", and the manifest's digest matches the
+canonical form recorded in the audit event.
 
-1. Load registry.json
-2. Validate module exists
-3. Parse submodules
-4. Check dependencies
-5. Detect conflicts (if any)
-6. Confirm with user
-7. Download & install (parallel)
-8. Verify installation
-9. Log to audit trail
-10. Mark as installed
-```
+### Why no automatic Rekall removal?
 
-### Conflict Resolution
+Rekall has been broken on Python ≥ 3.10 for years. Trying to install
+it pulls in `urllib3` downgrades that break other tools. The previous
+version "skipped" it by writing nothing, but listed it in the
+registry, which led to confusing partial installs. Now it's not in
+the registry at all. Volatility 3 is its documented replacement.
 
-```
-Module A requires: yara v4.0.0 (installed)
-Module B requires: yara v4.2.0 (newer)
+### Why is the audit-log signing key in the same container?
 
-System detects conflict:
-⚠️  CONFLICT DETECTED
+Convenience. For genuine non-repudiation, the key would live on a HSM
+or a separate logging host. We document this trade-off in
+[`SECURITY.md`](SECURITY.md). The architecture supports moving the
+keystore out: `forensics.audit.logger` reads its key path from
+`Config.paths.keys`, so mounting an HSM-backed PKCS#11 store at that
+path is a small change.
 
-Module 'malware-analysis' requires:
-  yara v4.2.0
+## Extension points
 
-Currently installed (by 'disk-forensics'):
-  yara v4.0.0
+### Adding a module
 
-Upgrade affects:
-  ✓ disk-forensics (compatible)
-  ✗ custom-script (may break)
+1. Add an entry to `modules/registry.json` (with `submodules` and
+   `verify` hints).
+2. Add installer functions to `core/forensics/modules/installers.py`
+   and register them in `INSTALLERS`.
+3. (Optional) Add removal commands to `REMOVERS`.
+4. Run `forensics-modules info <name>` and `forensics-modules install
+   <name> --dry-run` to sanity-check.
 
-User decides: [y/N]
-```
+### Adding a health probe
 
-## Performance Optimization
+1. Implement a function returning a `Section` in
+   `core/forensics/health/monitor.py`.
+2. Append it to `_FULL_PROBES`.
+3. Done — `forensics-health` will pick it up.
 
-### Parallel Processing
+### Adding a custom audit event
 
 ```python
-# Module installation
-with ThreadPoolExecutor(max_workers=4) as executor:
-    futures = [executor.submit(install_submodule, sm) 
-               for sm in submodules]
-    
-# Analysis
-GNU Parallel for batch processing
-async/await for I/O operations
-Multi-threading for CPU-bound tasks
+from forensics.audit.logger import log_event
+log_event("custom_event", {"detail": "..."}, user="sherlock")
 ```
 
-### Resource Management
+The hash chain and signatures are handled for you.
 
-```yaml
-docker-compose.yml:
-  resources:
-    limits:
-      cpus: '8'      # Use all cores
-      memory: 16G    # Generous for analysis
-    reservations:
-      cpus: '4'      # Minimum guaranteed
-      memory: 8G
-```
+### Replacing the keystore with a HSM
 
-### Optimizations
-
-- Compiled binaries (not scripts) where possible
-- Memory-mapped files for large datasets
-- Efficient data structures
-- Minimal dependencies in base image
-
-## Debugging System (Flight Recorder)
-
-### Telemetry Collection
-
-```python
-Automatic capture:
-- CPU usage
-- Memory usage
-- Disk I/O
-- Network I/O
-- Process count
-- System calls (strace-like)
-
-Stored in: /var/log/forensics/telemetry/
-```
-
-### Time-Travel Debugging
-
-```
-Concept: Record system state before each action
-
-forensics-debug replay --last-error
-→ Replays last 100 actions
-→ Shows state at each step
-→ Identifies failure point
-```
-
-### Performance Analysis
-
-```bash
-forensics-health why-slow "log2timeline.py"
-
-Output:
-Profiling log2timeline.py execution...
-Bottleneck detected:
-  - 85% time in I/O (reading disk.img)
-  - Recommendation: Use SSD or increase buffer size
-  - Suggested: log2timeline.py --buffer-size 1024M
-```
-
-## NIST SP 800-86 Compliance
-
-### Section Mapping
-
-| NIST Section | Implementation |
-|--------------|----------------|
-| 3.1.3 Evidence Collection | Automated chain of custody |
-| 3.1.4 Evidence Examination | Modular tools |
-| 3.1.5 Evidence Analysis | Documented workflow |
-| 4 Tool Validation | Module verification |
-| Appendix D Chain of Custody | Immutable audit trail |
-
-### Validation
-
-```bash
-forensics-compliance validate
-
-Checks:
-✓ Evidence handling: COMPLIANT
-✓ Chain of custody: COMPLIANT
-✓ Cryptographic integrity: COMPLIANT
-✓ Audit trail: COMPLIANT
-✓ Report format: COMPLIANT
-✓ Digital signatures: COMPLIANT
-```
-
-## Data Flow
-
-### Evidence Acquisition
-
-```
-External Storage → Host System
-                 ↓
-         forensics-professional/evidence/
-                 ↓
-         Container: /evidence (read-only)
-                 ↓
-         sherlock can READ
-                 ↓
-         Analysis in /cases/
-                 ↓
-         Results in /reports/
-```
-
-### Audit Trail
-
-```
-Action occurs (e.g., module install)
-         ↓
-audit-logger.py called
-         ↓
-1. Get last hash
-2. Create event data
-3. Compute current hash
-4. Sign with Ed25519
-5. Sign with GPG
-6. Append to log
-         ↓
-Log entry written (append-only)
-         ↓
-Available via forensics-audit show
-```
-
-## Container Lifecycle
-
-### Build Time
-
-```
-1. Stage 1: Build post-quantum crypto
-   - liboqs
-   - oqs-provider
-
-2. Stage 2: Build forensic tools
-   - Volatility3
-   - Others
-
-3. Stage 3: Runtime environment
-   - Copy from previous stages
-   - Install system packages
-   - Create users
-   - Set permissions
-   - Configure security
-```
-
-### Runtime
-
-```
-docker-compose up
-        ↓
-docker-entrypoint.sh runs
-        ↓
-1. Initialize as root:
-   - Set chattr +a on logs
-   - Secure evidence directory
-   - Initialize keys (if needed)
-   - Initialize audit system
-   - Log container_started
-
-2. Switch to sherlock user
-
-3. Load environment
-
-4. Display banner
-
-5. Drop to shell
-```
-
-### Shutdown
-
-```
-User exits → Container stops
-              ↓
-Volumes persist:
-- /evidence
-- /cases
-- /keys
-- /logs
-- /reports
-- /modules
-
-Next start → Data intact
-```
-
-## File System Layout
-
-```
-Container Filesystem:
-/
-├── evidence/          (read-only volume)
-├── cases/             (read-write volume)
-├── keys/              (protected volume)
-├── var/log/forensics/ (append-only volume)
-├── reports/           (read-write volume)
-├── opt/forensics/     (core system)
-│   ├── core/
-│   │   ├── audit-system/
-│   │   ├── module-manager/
-│   │   ├── compliance/
-│   │   └── integrations/
-│   ├── modules/       (module metadata)
-│   └── bin/           (utility scripts)
-├── etc/forensics/     (configuration)
-└── home/sherlock/     (user home)
-```
-
-## Network Architecture
-
-```
-Default: Bridge network (172.26.0.0/16)
-         ↓
-Internet access: YES (for module downloads)
-         ↓
-Can be changed to:
-- Host network (full host network access)
-- None (air-gapped)
-- Custom (user-defined)
-```
-
-## Extension Points
-
-### Adding New Modules
-
-1. Create manifest in `modules/manifests/new-module/`
-2. Define submodules
-3. Add to registry.json
-4. Implement install scripts
-5. Test installation
-6. Document
-
-### Adding Integrations
-
-```python
-/opt/forensics/integrations/
-├── siem_connector.py
-├── case_mgmt_api.py
-└── cloud_uploader.py
-
-Each implements standard interface:
-- connect()
-- send_data()
-- disconnect()
-```
-
-### Custom Compliance Checks
-
-```python
-/opt/forensics/core/compliance/
-├── nist_validator.py (implemented)
-├── iso27037_validator.py (future)
-└── custom_validator.py (user-defined)
-```
-
-## Technology Stack
-
-**Base**:
-- Ubuntu 22.04 LTS
-- Docker multi-stage build
-- Python 3.10+
-- Bash scripting
-
-**Cryptography**:
-- liboqs (post-quantum)
-- PyNaCl (Ed25519)
-- python-gnupg (GPG)
-- OpenSSL 3.0
-
-**Forensics** (modules):
-- Volatility, Rekall (memory)
-- Sleuthkit, Autopsy (disk)
-- Wireshark, Zeek (network)
-- YARA, radare2 (malware)
-- And many more...
-
-**Utilities**:
-- psutil (system monitoring)
-- tabulate (formatting)
-- rich (CLI output)
-- click (CLI framework)
-
-## Future Enhancements
-
-1. **Web Interface**: Case management dashboard
-2. **AI/ML**: Automated artifact detection
-3. **Distributed**: Multi-node analysis
-4. **Cloud Native**: Kubernetes deployment
-5. **Real-time**: Live system analysis
-6. **Collaboration**: Multi-user workflows
-
----
-
-**Architecture Version**: 2.0.0
-**Last Updated**: 2026-02-07
-**Maintained By**: Forensics Community
+Implement `_load_ed25519` and `_sign_ed25519` in your subclass of
+`AuditLogger`, then instantiate it in your CLI entry points. The rest
+of the package depends only on the `AuditLogger` interface.

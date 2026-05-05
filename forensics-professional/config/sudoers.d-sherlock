@@ -1,0 +1,58 @@
+# ==============================================================================
+# Sherlock — restricted sudo policy
+# ==============================================================================
+# Goal: let sherlock install forensic tools without becoming a general-purpose
+# root user. Each command is explicit; no wildcard shells, no NOPASSWD on
+# anything that yields a shell or rewrites system identity.
+# ==============================================================================
+
+# Defaults: always require terminal, never preserve env (prevents PATH attacks).
+Defaults:sherlock !requiretty
+Defaults:sherlock env_reset
+Defaults:sherlock secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# ── Package management (apt) ─────────────────────────────────────────────────
+sherlock ALL=(root) NOPASSWD: /usr/bin/apt-get update
+sherlock ALL=(root) NOPASSWD: /usr/bin/apt-get install -y *
+sherlock ALL=(root) NOPASSWD: /usr/bin/apt-get install --no-install-recommends -y *
+sherlock ALL=(root) NOPASSWD: /usr/bin/apt-get remove -y *
+sherlock ALL=(root) NOPASSWD: /usr/bin/apt-get autoremove -y
+sherlock ALL=(root) NOPASSWD: /usr/bin/apt-get clean
+sherlock ALL=(root) NOPASSWD: /usr/bin/dpkg --configure -a
+
+# ── Repository helpers (some modules add PPAs / external repos) ──────────────
+sherlock ALL=(root) NOPASSWD: /usr/bin/add-apt-repository -y *
+sherlock ALL=(root) NOPASSWD: /usr/bin/tee /etc/apt/sources.list.d/*
+sherlock ALL=(root) NOPASSWD: /usr/bin/tee /etc/apt/trusted.gpg.d/*
+
+# ── Python package management ────────────────────────────────────────────────
+sherlock ALL=(root) NOPASSWD: /usr/bin/pip3 install *
+sherlock ALL=(root) NOPASSWD: /usr/bin/pip3 install --break-system-packages *
+sherlock ALL=(root) NOPASSWD: /usr/bin/pip3 uninstall -y *
+
+# ── Filesystem placement of compiled artefacts ───────────────────────────────
+sherlock ALL=(root) NOPASSWD: /usr/bin/install -o root -g root -m * /tmp/* /usr/local/bin/*
+sherlock ALL=(root) NOPASSWD: /usr/bin/cp /tmp/* /opt/forensics/tools/*
+sherlock ALL=(root) NOPASSWD: /usr/bin/cp /tmp/* /usr/local/bin/*
+sherlock ALL=(root) NOPASSWD: /usr/bin/mv /tmp/* /usr/local/bin/*
+sherlock ALL=(root) NOPASSWD: /usr/bin/mv /tmp/* /opt/forensics/tools/*
+sherlock ALL=(root) NOPASSWD: /usr/bin/mkdir -p /opt/forensics/tools/*
+sherlock ALL=(root) NOPASSWD: /bin/chmod +x /usr/local/bin/*
+sherlock ALL=(root) NOPASSWD: /bin/chmod +x /opt/forensics/tools/*
+
+# ── ClamAV signatures refresh ────────────────────────────────────────────────
+sherlock ALL=(root) NOPASSWD: /usr/bin/freshclam
+
+# ── Append-only attribute on the audit log (chattr +a) ───────────────────────
+# Restricted to a single, fixed file path — not a generic chattr passthrough.
+sherlock ALL=(root) NOPASSWD: /usr/bin/chattr +a /var/log/forensics/audit.log
+sherlock ALL=(root) NOPASSWD: /usr/bin/chattr -a /var/log/forensics/audit.log
+
+# ── DEBCONF non-interactive helpers ──────────────────────────────────────────
+sherlock ALL=(root) NOPASSWD: /usr/bin/debconf-set-selections
+
+# Notes on what is NOT allowed (intentional):
+#   - sudo bash / sudo su / sudo -i / sudo -s   → all denied
+#   - Editing /etc/passwd, /etc/shadow, sudoers → denied
+#   - Modifying audit logs (only +a/-a on the canonical path)
+#   - Generic chmod/chown on arbitrary paths

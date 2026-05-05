@@ -1,832 +1,266 @@
 #!/usr/bin/env python3
-"""
-==============================================================================
-Professional Forensics Container — forensics-modules v2.1.0
-Gerenciador modular de ferramentas forenses com audit trail integrado
-Compliance: NIST SP 800-86
+"""``forensics-modules`` — CLI for the modular forensic-tool installer.
 
-CORREÇÕES INCORPORADAS (da bateria de testes):
-  - urllib3 atualizado para corrigir ImportError no Python 3.10
-    (collections.Mapping → collections.abc.Mapping)
-  - rekall marcado como "known broken" no Python 3.10 — pulado automaticamente
-  - backup-extractors: usa ABE via git clone + gradle (cp abe-all.jar, não abe.jar)
-  - hayabusa: URL v2.17.0 pode falhar — usa fallback com sigma-cli
-  - pip3 install com --break-system-packages quando disponível
-  - Logs de instalação em /var/log/forensics/installations/
-==============================================================================
+This is a thin wrapper around :class:`forensics.modules.ModuleManager`. The
+real work lives in the Python package; keeping this file slim makes both
+unit testing and behaviour changes cheap.
 """
+from __future__ import annotations
 
-import sys
-import os
-import json
-import subprocess
 import argparse
-import datetime
-import time
-import shutil
-import uuid
+import sys
+import textwrap
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Adicionar paths forenses ao Python
-sys.path.insert(0, "/opt/forensics/core")
-sys.path.insert(0, "/opt/forensics/core/audit-system")
+# Make the in-tree package importable when this script is invoked directly
+# (eg by /usr/local/bin/forensics-modules → core/module-manager/forensics-modules).
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str((HERE.parent.parent).resolve()))
 
-# ── Cores ANSI ────────────────────────────────────────────────────────────────
-RED    = '\033[0;31m'
-GREEN  = '\033[0;32m'
-YELLOW = '\033[1;33m'
-BLUE   = '\033[0;34m'
-CYAN   = '\033[0;36m'
-BOLD   = '\033[1m'
-NC     = '\033[0m'
-
-# ── Caminhos ──────────────────────────────────────────────────────────────────
-REGISTRY_PATH   = "/opt/forensics/modules/registry.json"
-INSTALLED_DIR   = "/opt/forensics/modules/installed"
-INSTALL_LOGS    = "/var/log/forensics/installations"
+from forensics import __version__  # noqa: E402
+from forensics.colors import BOLD, CYAN, DIM, GREEN, NC, RED, YELLOW  # noqa: E402
+from forensics.modules.manager import ModuleManager  # noqa: E402
+from forensics.modules.registry import ModuleSpec  # noqa: E402
 
 
-# ==============================================================================
-# Utilitários
-# ==============================================================================
+# ── command implementations ────────────────────────────────────────────────
 
-def _pip(*args):
-    """Retorna comando pip3 correto (com --break-system-packages se disponível)."""
-    base = ["pip3", "install"]
-    # Testar suporte ao flag
-    test = subprocess.run(["pip3", "install", "--help"],
-                          capture_output=True, text=True, timeout=5)
-    if "--break-system-packages" in test.stdout:
-        base.append("--break-system-packages")
-    return base + list(args)
+def cmd_list(args: argparse.Namespace) -> int:
+    mgr = ModuleManager()
+    modules = mgr.list_modules(category=args.category)
+
+    if args.json:
+        import json
+        payload = []
+        for m in modules:
+            payload.append({
+                "name": m.name,
+                "category": m.category,
+                "version": m.stable_version,
+                "size_mb": m.estimated_size_mb,
+                "tools":   m.tool_count,
+                "experimental": m.experimental,
+                "installed": mgr.is_marked_installed(m.name),
+                "submodules": [s.name for s in m.submodules],
+            })
+        print(json.dumps(payload, indent=2))
+        return 0
+
+    print(f"\n{CYAN}{'═' * 78}{NC}")
+    print(f"{BOLD}  Forensics Modules — registry v{__version__}{NC}")
+    print(f"{CYAN}{'═' * 78}{NC}")
+    print(f"  {'NAME':<22} {'CAT':<10} {'TOOLS':>5} {'SIZE':>8}  {'STATE':<14} FLAGS")
+    print(f"  {'-' * 22} {'-' * 10} {'-' * 5} {'-' * 8}  {'-' * 14} {'-' * 5}")
+    for m in modules:
+        installed = mgr.is_marked_installed(m.name)
+        state = (f"{GREEN}installed{NC}" if installed
+                 else f"{YELLOW}available{NC}")
+        flags = "experimental" if m.experimental else ""
+        print(f"  {m.name:<22} {m.category:<10} {m.tool_count:>5} "
+              f"{m.estimated_size_mb:>5} MB  {state:<23} {flags}")
+    print()
+    return 0
 
 
-def _apt(*pkgs):
-    """Retorna comando apt-get install."""
-    return ["sudo", "DEBIAN_FRONTEND=noninteractive",
-            "apt-get", "install", "-y"] + list(pkgs)
+def cmd_info(args: argparse.Namespace) -> int:
+    mgr = ModuleManager()
+    spec = mgr.get(args.module)
+    if spec is None:
+        print(f"{RED}unknown module: {args.module}{NC}", file=sys.stderr)
+        return 2
+
+    print(f"\n{CYAN}{'═' * 64}{NC}")
+    print(f"{BOLD}  {spec.name}{NC}  ({spec.category})")
+    print(f"{CYAN}{'═' * 64}{NC}")
+    print(f"  Version       : {spec.stable_version}")
+    print(f"  Size estimate : {spec.estimated_size_mb} MB")
+    print(f"  Tool count    : {spec.tool_count}")
+    print(f"  Experimental  : {'yes' if spec.experimental else 'no'}")
+    print(f"  Description   : {spec.description}")
+    if spec.dependencies:
+        print(f"  Dependencies  : {', '.join(spec.dependencies)}")
+    print(f"\n  {BOLD}Submodules{NC}")
+    for sm in spec.submodules:
+        verify_str = ", ".join(sm.verify) if sm.verify else f"{DIM}(unverified){NC}"
+        notes = f"  — {sm.notes}" if sm.notes else ""
+        print(f"    • {sm.name:<22} verify: {verify_str}{notes}")
+    if spec.known_issues:
+        print(f"\n  {YELLOW}Known issues{NC}")
+        for sub, issue in spec.known_issues.items():
+            print(f"    {sub}: {issue}")
+    if spec.tools_overview:
+        print(f"\n  Tools: {', '.join(spec.tools_overview)}")
+    print()
+    return 0
 
 
-def _sudo_apt_update():
-    return ["sudo", "apt-get", "update"]
+def cmd_install(args: argparse.Namespace) -> int:
+    mgr = ModuleManager()
+    if args.module not in mgr.registry:
+        print(f"{RED}unknown module: {args.module}{NC}", file=sys.stderr)
+        return 2
 
+    only = [s.strip() for s in args.only.split(",")] if args.only else None
+    skip = [s.strip() for s in args.skip.split(",")] if args.skip else None
 
-def _log_audit(event: str, details: dict):
-    """Registra evento no audit trail criptográfico."""
+    if not args.yes and not args.dry_run:
+        spec = mgr.registry[args.module]
+        print(f"\nAbout to install {BOLD}{spec.name}{NC} "
+              f"v{spec.stable_version} ({spec.estimated_size_mb} MB).")
+        if input("Proceed? [Y/n] ").strip().lower() in ("n", "no"):
+            print("aborted.")
+            return 1
+
     try:
-        from audit_logger import log_event
-        log_event(event, details)
-    except Exception:
-        pass  # Audit não pode quebrar o fluxo principal
-
-
-def _log_install(log_file: str, message: str):
-    """Escreve no log de instalação do módulo."""
-    ts = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-    try:
-        with open(log_file, "a") as f:
-            f.write(f"[{ts}] {message}\n")
-    except Exception:
-        pass
-
-
-# ==============================================================================
-# Runner de comandos com log
-# ==============================================================================
-
-class InstallRunner:
-    def __init__(self, log_file: str):
-        self.log_file = log_file
-
-    def run(self, cmd, description: str = "", ignore_failure: bool = False) -> bool:
-        cmd_str = " ".join(str(c) for c in cmd)
-        _log_install(self.log_file, f"Running: {cmd_str}")
-
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True, text=True,
-                timeout=600
-            )
-            if result.stdout:
-                _log_install(self.log_file, f"STDOUT: {result.stdout[:500]}")
-            if result.stderr:
-                _log_install(self.log_file, f"STDERR: {result.stderr[:500]}")
-
-            if result.returncode != 0 and not ignore_failure:
-                _log_install(self.log_file,
-                             f"FAILED (exit {result.returncode}): {cmd_str}")
-                raise RuntimeError(f"Command failed: {cmd_str}")
-
-            return result.returncode == 0
-        except subprocess.TimeoutExpired:
-            _log_install(self.log_file, f"TIMEOUT: {cmd_str}")
-            if not ignore_failure:
-                raise RuntimeError(f"Command timed out: {cmd_str}")
-            return False
-        except RuntimeError:
-            raise
-        except Exception as e:
-            _log_install(self.log_file, f"ERROR: {e}")
-            if not ignore_failure:
-                raise RuntimeError(str(e))
-            return False
-
-
-# ==============================================================================
-# Instaladores por submodulo
-# ==============================================================================
-
-class SubmoduleInstaller:
-    """Instala submodulos individuais de cada módulo forense."""
-
-    def __init__(self, runner: InstallRunner):
-        self.r = runner
-
-    # ── cloud-forensics ───────────────────────────────────────────────────────
-    def cloud_forensics_aws_tools(self):
-        self.r.run(_sudo_apt_update(), ignore_failure=True)
-        self.r.run(_apt("curl", "unzip"), ignore_failure=True)
-        self.r.run(["bash", "-c",
-                    "curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip "
-                    "-o /tmp/awscliv2.zip && unzip -q /tmp/awscliv2.zip -d /tmp && "
-                    "sudo /tmp/aws/install --update && rm -rf /tmp/aws /tmp/awscliv2.zip"],
-                   ignore_failure=True)
-        self.r.run(_pip("boto3", "s3transfer"), ignore_failure=True)
-
-    def cloud_forensics_azure_tools(self):
-        self.r.run(["bash", "-c",
-                    "curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash"],
-                   ignore_failure=True)
-        self.r.run(_pip("azure-mgmt-compute", "azure-mgmt-storage",
-                        "azure-identity"), ignore_failure=True)
-
-    def cloud_forensics_gcp_tools(self):
-        self.r.run(["bash", "-c",
-                    "echo 'deb [signed-by=/usr/share/keyrings/cloud.google.gpg] "
-                    "https://packages.cloud.google.com/apt cloud-sdk main' | "
-                    "sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list && "
-                    "curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | "
-                    "sudo gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg && "
-                    "sudo apt-get update && sudo apt-get install -y google-cloud-cli"],
-                   ignore_failure=True)
-
-    def cloud_forensics_generic_cloud(self):
-        self.r.run(_pip("cloudmapper", "scoutsuite", "prowler"),
-                   ignore_failure=True)
-
-    # ── memory-forensics ──────────────────────────────────────────────────────
-    def memory_forensics_volatility(self):
-        self.r.run(_pip("volatility3"), ignore_failure=True)
-        # Volatility2 via git
-        self.r.run(["bash", "-c",
-                    "git clone --depth 1 https://github.com/volatilityfoundation/volatility "
-                    "/opt/forensics/tools/volatility2 || true"], ignore_failure=True)
-
-    def memory_forensics_rekall(self):
-        # KNOWN ISSUE: rekall quebra no Python 3.10
-        # pip3 install rekall falha — pulado automaticamente
-        _log_install(self.r.log_file,
-                     "SKIPPED: rekall is incompatible with Python 3.10. "
-                     "Use Volatility3 instead.")
-
-    def memory_forensics_lime(self):
-        self.r.run(_apt("git", "build-essential", "linux-headers-generic"),
-                   ignore_failure=True)
-        self.r.run(["bash", "-c",
-                    "git clone --depth 1 https://github.com/504ensicsLabs/LiME "
-                    "/tmp/LiME && cd /tmp/LiME/src && make || true"],
-                   ignore_failure=True)
-
-    def memory_forensics_avml(self):
-        self.r.run(["bash", "-c",
-                    "AVML_URL=$(curl -s https://api.github.com/repos/microsoft/avml/releases/latest"
-                    " | python3 -c \"import sys,json; d=json.load(sys.stdin);"
-                    " [print(a['browser_download_url']) for a in d.get('assets',[]) "
-                    " if 'linux' in a['name'] and a['name'].endswith('.gz')]\" | head -1) && "
-                    "[ -n \"$AVML_URL\" ] && "
-                    "wget -q \"$AVML_URL\" -O /tmp/avml.gz && "
-                    "gunzip /tmp/avml.gz && "
-                    "sudo mv /tmp/avml /usr/local/bin/avml && "
-                    "sudo chmod +x /usr/local/bin/avml || true"],
-                   ignore_failure=True)
-
-    # ── disk-forensics ────────────────────────────────────────────────────────
-    def disk_forensics_sleuthkit(self):
-        self.r.run(_sudo_apt_update(), ignore_failure=True)
-        self.r.run(_apt("sleuthkit", "dcfldd", "ddrescue"))
-
-    def disk_forensics_autopsy(self):
-        self.r.run(_apt("autopsy"), ignore_failure=True)
-
-    def disk_forensics_testdisk(self):
-        self.r.run(_apt("testdisk"))
-
-    def disk_forensics_foremost(self):
-        self.r.run(_apt("foremost"))
-
-    def disk_forensics_scalpel(self):
-        self.r.run(_apt("scalpel"), ignore_failure=True)
-
-    # ── network-forensics ─────────────────────────────────────────────────────
-    def network_forensics_wireshark(self):
-        self.r.run(_sudo_apt_update(), ignore_failure=True)
-        self.r.run(["bash", "-c",
-                    "echo 'wireshark-common wireshark-common/install-setuid boolean false' "
-                    "| sudo debconf-set-selections && "
-                    "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y tshark wireshark"],
-                   ignore_failure=True)
-
-    def network_forensics_zeek(self):
-        self.r.run(["bash", "-c",
-                    "echo 'deb http://download.opensuse.org/repositories/security:/zeek/"
-                    "xUbuntu_22.04/ /' | sudo tee /etc/apt/sources.list.d/zeek.list && "
-                    "curl -fsSL https://download.opensuse.org/repositories/security:/zeek/"
-                    "xUbuntu_22.04/Release.key | sudo gpg --dearmor "
-                    "-o /etc/apt/trusted.gpg.d/zeek.gpg && "
-                    "sudo apt-get update && sudo apt-get install -y zeek || "
-                    "sudo apt-get install -y zeek"],
-                   ignore_failure=True)
-
-    def network_forensics_tcpdump(self):
-        self.r.run(_apt("tcpdump", "libpcap-dev"))
-
-    def network_forensics_ngrep(self):
-        self.r.run(_apt("ngrep", "tcpflow"), ignore_failure=True)
-
-    # ── mobile-forensics ──────────────────────────────────────────────────────
-    def mobile_forensics_android_tools(self):
-        self.r.run(_sudo_apt_update(), ignore_failure=True)
-        self.r.run(_apt("android-tools-adb", "android-tools-fastboot"))
-        self.r.run(_pip("androguard"), ignore_failure=True)
-
-    def mobile_forensics_ios_tools(self):
-        self.r.run(_apt("libimobiledevice-utils", "ideviceinstaller",
-                        "ifuse"), ignore_failure=True)
-
-    def mobile_forensics_backup_extractors(self):
-        """
-        CORREÇÃO: android-backup-extractor não existe no PyPI.
-        Solução: clonar e compilar via Gradle.
-        O arquivo gerado é abe-all.jar (não abe.jar).
-        """
-        self.r.run(_apt("default-jdk", "sqlite3", "git"), ignore_failure=True)
-        self.r.run(["sudo", "mkdir", "-p", "/opt/forensics/tools"])
-        # Limpar tentativa anterior
-        self.r.run(["rm", "-rf", "/tmp/abe"], ignore_failure=True)
-        # Clonar
-        self.r.run(["git", "clone",
-                    "https://github.com/nelenkov/android-backup-extractor",
-                    "/tmp/abe"])
-        # Compilar com Gradle
-        self.r.run(["bash", "-c", "cd /tmp/abe && ./gradlew"])
-        # Copiar: FIX — arquivo é abe-all.jar, NÃO abe.jar
-        self.r.run(["sudo", "cp",
-                    "/tmp/abe/build/libs/abe-all.jar",
-                    "/opt/forensics/tools/abe.jar"])
-        self.r.run(["rm", "-rf", "/tmp/abe"], ignore_failure=True)
-        _log_install(self.r.log_file,
-                     "ABE installed: java -jar /opt/forensics/tools/abe.jar unpack backup.ab out.tar")
-
-    # ── malware-analysis ──────────────────────────────────────────────────────
-    def malware_analysis_yara(self):
-        self.r.run(_apt("yara"), ignore_failure=True)
-        self.r.run(_pip("yara-python"), ignore_failure=True)
-        # YARA rules públicas
-        self.r.run(["bash", "-c",
-                    "git clone --depth 1 https://github.com/Yara-Rules/rules "
-                    "/opt/forensics/tools/yara-rules || true"], ignore_failure=True)
-
-    def malware_analysis_radare2(self):
-        self.r.run(["bash", "-c",
-                    "git clone --depth 1 https://github.com/rizinorg/rizin /tmp/rizin && "
-                    "cd /tmp/rizin && meson setup build && ninja -C build && "
-                    "sudo ninja -C build install || "
-                    "sudo apt-get install -y rizin"],
-                   ignore_failure=True)
-
-    def malware_analysis_ghidra(self):
-        self.r.run(_apt("default-jdk"), ignore_failure=True)
-        self.r.run(["bash", "-c",
-                    "GHIDRA_URL=$(curl -s https://api.github.com/repos/NationalSecurityAgency/"
-                    "ghidra/releases/latest | python3 -c \"import sys,json; d=json.load(sys.stdin);"
-                    " [print(a['browser_download_url']) for a in d.get('assets',[]) "
-                    " if a['name'].endswith('.zip')]\" | head -1) && "
-                    "[ -n \"$GHIDRA_URL\" ] && "
-                    "wget -q \"$GHIDRA_URL\" -O /tmp/ghidra.zip && "
-                    "sudo unzip -q /tmp/ghidra.zip -d /opt/forensics/tools/ && "
-                    "rm -f /tmp/ghidra.zip || true"],
-                   ignore_failure=True)
-
-    def malware_analysis_clamav(self):
-        self.r.run(_apt("clamav", "clamav-daemon"))
-        self.r.run(["sudo", "freshclam"], ignore_failure=True)
-
-    # ── windows-forensics ─────────────────────────────────────────────────────
-    def windows_forensics_regripper(self):
-        self.r.run(_apt("libparse-win32registry-perl"), ignore_failure=True)
-        self.r.run(["bash", "-c",
-                    "git clone --depth 1 https://github.com/keydet89/RegRipper3.0 "
-                    "/opt/forensics/tools/regripper || true"], ignore_failure=True)
-
-    def windows_forensics_plaso(self):
-        # Plaso requer software-properties-common (já no Dockerfile)
-        self.r.run(["sudo", "add-apt-repository", "-y",
-                    "ppa:gift/stable"], ignore_failure=True)
-        self.r.run(_sudo_apt_update(), ignore_failure=True)
-        self.r.run(_apt("python3-plaso"), ignore_failure=True)
-        self.r.run(_pip("plaso"), ignore_failure=True)
-
-    def windows_forensics_evtx_parser(self):
-        self.r.run(_pip("python-evtx"), ignore_failure=True)
-
-    def windows_forensics_prefetch_parser(self):
-        self.r.run(_pip("prefetch"), ignore_failure=True)
-        self.r.run(["bash", "-c",
-                    "git clone --depth 1 https://github.com/PoorBillionaire/prefetch-parser "
-                    "/opt/forensics/tools/prefetch-parser || true"], ignore_failure=True)
-
-    # ── linux-forensics ───────────────────────────────────────────────────────
-    def linux_forensics_auditd_tools(self):
-        self.r.run(_apt("auditd", "audispd-plugins"))
-
-    def linux_forensics_log_parsers(self):
-        self.r.run(_apt("logwatch", "goaccess"), ignore_failure=True)
-
-    def linux_forensics_ext4_tools(self):
-        self.r.run(_apt("e2fsprogs", "extundelete"), ignore_failure=True)
-
-    # ── container-forensics ───────────────────────────────────────────────────
-    def container_forensics_docker_forensics(self):
-        self.r.run(["bash", "-c",
-                    "wget -q https://github.com/wagoodman/dive/releases/latest/download/"
-                    "dive_linux_amd64.tar.gz -O /tmp/dive.tar.gz && "
-                    "sudo tar -xzf /tmp/dive.tar.gz -C /usr/local/bin dive && "
-                    "rm -f /tmp/dive.tar.gz || true"], ignore_failure=True)
-
-    def container_forensics_kubernetes_tools(self):
-        self.r.run(["bash", "-c",
-                    "curl -LO https://dl.k8s.io/release/$(curl -L -s "
-                    "https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl && "
-                    "sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl && "
-                    "rm -f kubectl || true"], ignore_failure=True)
-
-    # ── database-forensics ────────────────────────────────────────────────────
-    def database_forensics_mysql_tools(self):
-        self.r.run(_apt("mysql-client", "default-mysql-client"), ignore_failure=True)
-
-    def database_forensics_postgresql_tools(self):
-        self.r.run(_apt("postgresql-client"), ignore_failure=True)
-
-    def database_forensics_mongodb_tools(self):
-        self.r.run(_apt("mongodb-clients"), ignore_failure=True)
-        self.r.run(_pip("pymongo"), ignore_failure=True)
-
-    # ── email-forensics ───────────────────────────────────────────────────────
-    def email_forensics_pst_parser(self):
-        self.r.run(_apt("libpst-dev", "readpst"), ignore_failure=True)
-
-    def email_forensics_eml_parser(self):
-        self.r.run(_pip("eml_parser", "emlAnalyzer"), ignore_failure=True)
-
-    def email_forensics_header_analyzer(self):
-        self.r.run(_pip("mail-parser"), ignore_failure=True)
-
-    # ── osint-tools ───────────────────────────────────────────────────────────
-    def osint_tools_social_media(self):
-        self.r.run(_pip("sherlock-project", "maigret"), ignore_failure=True)
-
-    def osint_tools_email_osint(self):
-        self.r.run(_pip("holehe"), ignore_failure=True)
-
-    def osint_tools_domain_recon(self):
-        self.r.run(_pip("theHarvester"), ignore_failure=True)
-        self.r.run(["bash", "-c",
-                    "go install -v github.com/owasp-amass/amass/v4/...@latest || "
-                    "apt-get install -y amass || true"], ignore_failure=True)
-
-    def osint_tools_phone_osint(self):
-        self.r.run(["bash", "-c",
-                    "pip3 install phoneinfoga || "
-                    "git clone --depth 1 https://github.com/sundowndev/phoneinfoga "
-                    "/opt/forensics/tools/phoneinfoga || true"], ignore_failure=True)
-
-    # ── threat-intelligence ───────────────────────────────────────────────────
-    def threat_intelligence_ioc_feeds(self):
-        self.r.run(_pip("pymisp", "OTXv2"), ignore_failure=True)
-
-    def threat_intelligence_threat_hunting(self):
-        self.r.run(_pip("sigma-cli", "pysigma"), ignore_failure=True)
-        # Hayabusa — tenta URL mais recente
-        # KNOWN ISSUE: URL v2.17.0 pode falhar; usa latest release da API
-        self.r.run(["bash", "-c",
-                    "HAYABUSA_URL=$(curl -s https://api.github.com/repos/Yamato-Security/"
-                    "hayabusa/releases/latest | python3 -c \"import sys,json; "
-                    "d=json.load(sys.stdin); "
-                    "[print(a['browser_download_url']) for a in d.get('assets',[]) "
-                    "if 'linux-x64' in a['name'] and a['name'].endswith('.zip')]\" | head -1) && "
-                    "[ -n \"$HAYABUSA_URL\" ] && "
-                    "wget -q \"$HAYABUSA_URL\" -O /tmp/hayabusa.zip && "
-                    "sudo mkdir -p /opt/forensics/tools && "
-                    "sudo unzip -q /tmp/hayabusa.zip -d /opt/forensics/tools/hayabusa && "
-                    "rm -f /tmp/hayabusa.zip || true"],
-                   ignore_failure=True)
-
-    def threat_intelligence_misp_integration(self):
-        self.r.run(_pip("pymisp"), ignore_failure=True)
-
-    def threat_intelligence_opencti_tools(self):
-        self.r.run(_pip("pycti"), ignore_failure=True)
-
-    # ── web-recon ─────────────────────────────────────────────────────────────
-    def web_recon_subdomain_enum(self):
-        self.r.run(["bash", "-c",
-                    "GO_URL=https://go.dev/dl/go1.21.linux-amd64.tar.gz && "
-                    "wget -q $GO_URL -O /tmp/go.tar.gz && "
-                    "sudo rm -rf /usr/local/go && "
-                    "sudo tar -C /usr/local -xzf /tmp/go.tar.gz && "
-                    "rm /tmp/go.tar.gz && "
-                    "export PATH=$PATH:/usr/local/go/bin && "
-                    "go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest || true"],
-                   ignore_failure=True)
-
-    def web_recon_web_scraping(self):
-        self.r.run(_pip("scrapy", "beautifulsoup4", "requests"), ignore_failure=True)
-
-    def web_recon_dns_recon(self):
-        self.r.run(_apt("dnsrecon", "dnsenum"), ignore_failure=True)
-        self.r.run(_pip("dnsrecon"), ignore_failure=True)
-
-
-# ==============================================================================
-# Mapa de instaladores
-# ==============================================================================
-
-SUBMODULE_MAP = {
-    "cloud-forensics": {
-        "aws-tools":     lambda s: s.cloud_forensics_aws_tools(),
-        "azure-tools":   lambda s: s.cloud_forensics_azure_tools(),
-        "gcp-tools":     lambda s: s.cloud_forensics_gcp_tools(),
-        "generic-cloud": lambda s: s.cloud_forensics_generic_cloud(),
-    },
-    "memory-forensics": {
-        "volatility": lambda s: s.memory_forensics_volatility(),
-        "rekall":     lambda s: s.memory_forensics_rekall(),
-        "lime":       lambda s: s.memory_forensics_lime(),
-        "avml":       lambda s: s.memory_forensics_avml(),
-    },
-    "disk-forensics": {
-        "sleuthkit": lambda s: s.disk_forensics_sleuthkit(),
-        "autopsy":   lambda s: s.disk_forensics_autopsy(),
-        "testdisk":  lambda s: s.disk_forensics_testdisk(),
-        "foremost":  lambda s: s.disk_forensics_foremost(),
-        "scalpel":   lambda s: s.disk_forensics_scalpel(),
-    },
-    "network-forensics": {
-        "wireshark": lambda s: s.network_forensics_wireshark(),
-        "zeek":      lambda s: s.network_forensics_zeek(),
-        "tcpdump":   lambda s: s.network_forensics_tcpdump(),
-        "ngrep":     lambda s: s.network_forensics_ngrep(),
-    },
-    "mobile-forensics": {
-        "android-tools":     lambda s: s.mobile_forensics_android_tools(),
-        "ios-tools":         lambda s: s.mobile_forensics_ios_tools(),
-        "backup-extractors": lambda s: s.mobile_forensics_backup_extractors(),
-    },
-    "malware-analysis": {
-        "yara":    lambda s: s.malware_analysis_yara(),
-        "radare2": lambda s: s.malware_analysis_radare2(),
-        "ghidra":  lambda s: s.malware_analysis_ghidra(),
-        "clamav":  lambda s: s.malware_analysis_clamav(),
-    },
-    "windows-forensics": {
-        "regripper":      lambda s: s.windows_forensics_regripper(),
-        "plaso":          lambda s: s.windows_forensics_plaso(),
-        "evtx-parser":    lambda s: s.windows_forensics_evtx_parser(),
-        "prefetch-parser": lambda s: s.windows_forensics_prefetch_parser(),
-    },
-    "linux-forensics": {
-        "auditd-tools": lambda s: s.linux_forensics_auditd_tools(),
-        "log-parsers":  lambda s: s.linux_forensics_log_parsers(),
-        "ext4-tools":   lambda s: s.linux_forensics_ext4_tools(),
-    },
-    "container-forensics": {
-        "docker-forensics":  lambda s: s.container_forensics_docker_forensics(),
-        "kubernetes-tools":  lambda s: s.container_forensics_kubernetes_tools(),
-    },
-    "database-forensics": {
-        "mysql-tools":      lambda s: s.database_forensics_mysql_tools(),
-        "postgresql-tools": lambda s: s.database_forensics_postgresql_tools(),
-        "mongodb-tools":    lambda s: s.database_forensics_mongodb_tools(),
-    },
-    "email-forensics": {
-        "pst-parser":     lambda s: s.email_forensics_pst_parser(),
-        "eml-parser":     lambda s: s.email_forensics_eml_parser(),
-        "header-analyzer": lambda s: s.email_forensics_header_analyzer(),
-    },
-    "osint-tools": {
-        "social-media": lambda s: s.osint_tools_social_media(),
-        "email-osint":  lambda s: s.osint_tools_email_osint(),
-        "domain-recon": lambda s: s.osint_tools_domain_recon(),
-        "phone-osint":  lambda s: s.osint_tools_phone_osint(),
-    },
-    "threat-intelligence": {
-        "ioc-feeds":       lambda s: s.threat_intelligence_ioc_feeds(),
-        "threat-hunting":  lambda s: s.threat_intelligence_threat_hunting(),
-        "misp-integration": lambda s: s.threat_intelligence_misp_integration(),
-        "opencti-tools":   lambda s: s.threat_intelligence_opencti_tools(),
-    },
-    "web-recon": {
-        "subdomain-enum": lambda s: s.web_recon_subdomain_enum(),
-        "web-scraping":   lambda s: s.web_recon_web_scraping(),
-        "dns-recon":      lambda s: s.web_recon_dns_recon(),
-    },
-}
-
-
-# ==============================================================================
-# CLI Principal
-# ==============================================================================
-
-class ForensicsModules:
-
-    def __init__(self):
-        self.registry = self._load_registry()
-        os.makedirs(INSTALLED_DIR, exist_ok=True)
-        os.makedirs(INSTALL_LOGS, exist_ok=True)
-
-    def _load_registry(self) -> dict:
-        try:
-            with open(REGISTRY_PATH) as f:
-                return json.load(f)
-        except Exception:
-            return {"modules": {}}
-
-    def _is_installed(self, module: str) -> bool:
-        return Path(f"{INSTALLED_DIR}/{module}").exists()
-
-    def _mark_installed(self, module: str, submodules: list):
-        info = {
-            "installed_at": datetime.datetime.utcnow().isoformat() + "Z",
-            "submodules": submodules
-        }
-        with open(f"{INSTALLED_DIR}/{module}", "w") as f:
-            json.dump(info, f, indent=2)
-
-    def _mark_removed(self, module: str):
-        p = Path(f"{INSTALLED_DIR}/{module}")
-        if p.exists():
-            p.unlink()
-
-    def _get_log_file(self, module: str) -> str:
-        ts = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        return f"{INSTALL_LOGS}/{module}_{ts}.log"
-
-    # ── list ──────────────────────────────────────────────────────────────────
-    def cmd_list(self, args):
-        mods = self.registry.get("modules", {})
-        cat_filter = getattr(args, "category", None)
-
-        print(f"\n{CYAN}{'='*70}{NC}")
-        print(f"{BOLD}{CYAN}  AVAILABLE FORENSICS MODULES{NC}")
-        print(f"{CYAN}{'='*70}{NC}\n")
-        print(f"  {'MODULE':<25} {'CAT':<10} {'TOOLS':>6} {'SIZE':>8} {'STATUS':<12}")
-        print(f"  {'-'*25} {'-'*10} {'-'*6} {'-'*8} {'-'*12}")
-
-        for name, info in mods.items():
-            cat = info.get("category", "?")
-            if cat_filter and cat != cat_filter:
-                continue
-            tools = info.get("tool_count", "?")
-            size  = f"{info.get('estimated_size_mb', '?')} MB"
-            inst  = f"{GREEN}✅ Installed{NC}" if self._is_installed(name) \
-                    else f"{YELLOW}❌ Available{NC}"
-            print(f"  {name:<25} {cat:<10} {tools:>6} {size:>8} {inst}")
-
-        total = self.registry.get("total_stats", {})
-        print(f"\n  {GREEN}Total: {total.get('total_modules', len(mods))} modules "
-              f"| {total.get('total_tools', '161+')} tools "
-              f"| ~{total.get('total_size_all_modules_mb', '9.3 GB')} MB (all){NC}\n")
-
-    # ── info ──────────────────────────────────────────────────────────────────
-    def cmd_info(self, args):
-        module = args.module
-        mods = self.registry.get("modules", {})
-        if module not in mods:
-            print(f"\n{RED}❌ Module not found: {module}{NC}\n")
-            return
-        info = mods[module]
-        print(f"\n{CYAN}{'='*60}{NC}")
-        print(f"{BOLD}  MODULE: {module}{NC}")
-        print(f"{CYAN}{'='*60}{NC}\n")
-        for k, v in info.items():
-            print(f"  {YELLOW}{k:<22}{NC}: {v}")
-        print()
-
-    # ── install ───────────────────────────────────────────────────────────────
-    def cmd_install(self, args):
-        module = args.module
-        only   = getattr(args, "only", None)
-        interactive = getattr(args, "interactive", False)
-
-        mods = self.registry.get("modules", {})
-        if module not in mods:
-            print(f"\n{RED}❌ Module not found: {module}{NC}")
-            print(f"  Run: {CYAN}forensics-modules list{NC}\n")
-            return
-
-        mod_info = mods[module]
-        available_subs = mod_info.get("submodules", [])
-        version = mod_info.get("stable_version", "1.0.0")
-
-        # Determinar submodulos a instalar
-        if only:
-            subs_to_install = [s.strip() for s in only.split(",")
-                               if s.strip() in available_subs]
-        elif interactive:
-            subs_to_install = self._interactive_select(available_subs)
-        else:
-            subs_to_install = available_subs
-
-        print(f"\n{CYAN}{'='*60}{NC}")
-        print(f"{BOLD}  📦 Installing {module} v{version}{NC}")
-        print(f"{CYAN}{'='*60}{NC}")
-        print(f"  Sub-modules: {', '.join(subs_to_install)}")
-
-        # Confirmar
-        ans = input(f"\n  Proceed with installation? [Y/n]: ").strip().lower()
-        if ans in ("n", "no"):
-            print(f"  {YELLOW}Installation cancelled.{NC}\n")
-            return
-
-        log_file = self._get_log_file(module)
-        _log_install(log_file, f"=== Installing {module} v{version} ===")
-        _log_install(log_file, f"Sub-modules: {', '.join(subs_to_install)}")
-        _log_install(log_file, f"Timestamp: {datetime.datetime.utcnow()}")
-
-        runner = InstallRunner(log_file)
-        installer = SubmoduleInstaller(runner)
-
-        mod_map = SUBMODULE_MAP.get(module, {})
-        results = {}
-
-        print()
-        for sub in subs_to_install:
-            print(f"  {YELLOW}[⏳]{NC} Installing {sub}...")
-            _log_install(log_file, f"\n=== Installing {sub} ===")
-
-            if sub not in mod_map:
-                print(f"  {YELLOW}[⚠️]{NC} {sub}: no installer defined, skipping")
-                results[sub] = "skipped"
-                continue
-
-            try:
-                mod_map[sub](installer)
-                print(f"  {GREEN}[✓]{NC} {sub} installed successfully")
-                _log_install(log_file, f"{sub}: SUCCESS")
-                results[sub] = "success"
-            except Exception as e:
-                print(f"  {RED}[✗]{NC} {sub} installation failed: {e}")
-                _log_install(log_file, f"{sub}: FAILED - {e}")
-                results[sub] = f"failed:{e}"
-
-        # Resultado final
-        success_count = sum(1 for v in results.values() if v == "success")
-        total = len(subs_to_install)
-        print(f"\n  📝 Installation log: {log_file}")
-
-        if success_count == total:
-            self._mark_installed(module, list(results.keys()))
-            print(f"  {GREEN}✅ {module} installed successfully ({success_count}/{total}){NC}\n")
-            _log_audit("module_install", {
-                "module": module, "version": version,
-                "submodules": subs_to_install, "result": "success"
-            })
-        elif success_count > 0:
-            self._mark_installed(module, [k for k, v in results.items()
-                                          if v == "success"])
-            print(f"  {YELLOW}⚠️  {module} partially installed "
-                  f"({success_count}/{total}){NC}\n")
-            _log_audit("module_install", {
-                "module": module, "version": version,
-                "result": "partial", "failed": [k for k, v in results.items()
-                                                 if v.startswith("failed")]
-            })
-        else:
-            print(f"  {RED}❌ Installation of {module} failed{NC}\n")
-            _log_audit("module_install", {
-                "module": module, "version": version,
-                "result": "failed"
-            })
-
-    def _interactive_select(self, available: list) -> list:
-        """Seleção interativa de submodulos."""
-        selected = list(available)
-        print(f"\n  {CYAN}Select sub-modules to install (space = toggle, enter = confirm):{NC}")
-        for i, sub in enumerate(available):
-            state = "x"
-            ans = input(f"  [{state}] {sub}? [Y/n]: ").strip().lower()
-            if ans in ("n", "no"):
-                selected.remove(sub)
-        return selected
-
-    # ── remove ────────────────────────────────────────────────────────────────
-    def cmd_remove(self, args):
-        module = args.module
-        if not self._is_installed(module):
-            print(f"\n{YELLOW}⚠️  {module} is not marked as installed.{NC}\n")
-            return
-        self._mark_removed(module)
-        print(f"\n{GREEN}✅ {module} removed from installed registry.{NC}")
-        print(f"  {YELLOW}Note: Tools remain installed. Reinstall to track again.{NC}\n")
-        _log_audit("module_remove", {"module": module})
-
-    # ── status ────────────────────────────────────────────────────────────────
-    def cmd_status(self, args):
-        print(f"\n{CYAN}{'='*50}{NC}")
-        print(f"{BOLD}  INSTALLED MODULES{NC}")
-        print(f"{CYAN}{'='*50}{NC}\n")
-        mods = self.registry.get("modules", {})
-        for name in mods:
-            if self._is_installed(name):
-                try:
-                    with open(f"{INSTALLED_DIR}/{name}") as f:
-                        info = json.load(f)
-                    ts = info.get("installed_at", "?")[:19]
-                    print(f"  {GREEN}✅{NC} {name:<25} {YELLOW}{ts}{NC}")
-                except Exception:
-                    print(f"  {GREEN}✅{NC} {name}")
-        print()
-
-    # ── verify ────────────────────────────────────────────────────────────────
-    def cmd_verify(self, args):
-        module = getattr(args, "module", "all")
-        print(f"\n{CYAN}Verifying module integrity...{NC}")
-        if module == "all":
-            mods = [m for m in self.registry.get("modules", {}) if self._is_installed(m)]
-        else:
-            mods = [module]
-        for m in mods:
-            print(f"  {GREEN}✅{NC} {m}: OK")
-        print()
-
-
-# ==============================================================================
-# Entry point
-# ==============================================================================
-
-def main():
-    parser = argparse.ArgumentParser(
-        prog="forensics-modules",
-        description="Professional Forensics Module Manager v2.1.0"
+        result = mgr.install(
+            args.module,
+            only=only, skip=skip,
+            jobs=args.jobs,
+            dry_run=args.dry_run,
+            force=args.force,
+        )
+    except KeyError as exc:
+        print(f"{RED}{exc}{NC}", file=sys.stderr)
+        return 2
+
+    return 0 if result.overall in ("success", "noop") else (
+        1 if result.overall == "partial" else 3
     )
-    sub = parser.add_subparsers(dest="command")
+
+
+def cmd_remove(args: argparse.Namespace) -> int:
+    mgr = ModuleManager()
+    if args.module not in mgr.registry:
+        print(f"{RED}unknown module: {args.module}{NC}", file=sys.stderr)
+        return 2
+    if not args.yes and not args.dry_run:
+        if input(f"remove {args.module}? [y/N] ").strip().lower() not in ("y", "yes"):
+            print("aborted.")
+            return 1
+    result = mgr.remove(args.module, dry_run=args.dry_run)
+    return 0 if result.overall in ("success", "noop") else 1
+
+
+def cmd_status(_args: argparse.Namespace) -> int:
+    mgr = ModuleManager()
+    print(f"\n{CYAN}{'═' * 64}{NC}")
+    print(f"{BOLD}  Installed modules{NC}")
+    print(f"{CYAN}{'═' * 64}{NC}")
+    installed = mgr.installed_modules()
+    if not installed:
+        print(f"  {DIM}(none yet — try: forensics-modules install <name>){NC}\n")
+        return 0
+    for name in installed:
+        manifest = mgr.load_manifest(name) or {}
+        ts = manifest.get("installed_at", "?")
+        ver = manifest.get("version", "?")
+        digest = manifest.get("digest", "")[:16]
+        print(f"  {GREEN}✓{NC}  {name:<22} v{ver:<10} {ts:<28} {DIM}{digest}{NC}")
+    print()
+    return 0
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    mgr = ModuleManager()
+    name = args.module if args.module != "all" else None
+    results = mgr.verify(name=name)
+    if not results:
+        print(f"{YELLOW}nothing installed to verify{NC}")
+        return 0
+
+    overall_ok = True
+    for mod_name, sub_results in results.items():
+        print(f"\n  {BOLD}{mod_name}{NC}")
+        for sm_name, check in sub_results.items():
+            symbol = f"{GREEN}✓{NC}" if check.ok else f"{RED}✗{NC}"
+            if not check.ok:
+                overall_ok = False
+            missing = ", ".join(h for h, ok in check.findings if not ok)
+            detail = "" if check.ok else f"missing: {missing}"
+            print(f"    {symbol}  {sm_name:<22} {DIM}{detail}{NC}")
+    print()
+    return 0 if overall_ok else 1
+
+
+def cmd_repair(args: argparse.Namespace) -> int:
+    mgr = ModuleManager()
+    result = mgr.repair(args.module)
+    return 0 if result.overall in ("success", "noop") else 1
+
+
+# ── Argparse plumbing ──────────────────────────────────────────────────────
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="forensics-modules",
+        description="Modular forensic-tool installer with audited operations.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=textwrap.dedent("""\
+            Examples:
+              forensics-modules list
+              forensics-modules info memory-forensics
+              forensics-modules install memory-forensics --only volatility,avml
+              forensics-modules install osint-tools --dry-run
+              forensics-modules verify all
+              forensics-modules repair malware-analysis
+        """),
+    )
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    sub = p.add_subparsers(dest="cmd", required=True)
 
     # list
-    list_p = sub.add_parser("list", help="List available modules")
-    list_p.add_argument("--category", help="Filter by category")
+    s = sub.add_parser("list", help="List available modules.")
+    s.add_argument("--category", help="Filter by category.")
+    s.add_argument("--json", action="store_true", help="Emit JSON for tooling.")
+    s.set_defaults(fn=cmd_list)
 
     # info
-    info_p = sub.add_parser("info", help="Show module details")
-    info_p.add_argument("module")
+    s = sub.add_parser("info", help="Show module details.")
+    s.add_argument("module")
+    s.set_defaults(fn=cmd_info)
 
     # install
-    inst_p = sub.add_parser("install", help="Install a module")
-    inst_p.add_argument("module")
-    inst_p.add_argument("--only", help="Comma-separated submodules to install")
-    inst_p.add_argument("--interactive", action="store_true",
-                        help="Interactive submodule selection")
+    s = sub.add_parser("install", help="Install a module.")
+    s.add_argument("module")
+    s.add_argument("--only", help="Comma-separated submodules to include.")
+    s.add_argument("--skip", help="Comma-separated submodules to exclude.")
+    s.add_argument("--jobs", type=int, help="Parallel installer jobs (advanced).")
+    s.add_argument("--force", action="store_true",
+                   help="Reinstall even if verifier hints already pass.")
+    s.add_argument("--dry-run", action="store_true",
+                   help="Print the plan; run nothing.")
+    s.add_argument("-y", "--yes", action="store_true",
+                   help="Don't prompt for confirmation.")
+    s.set_defaults(fn=cmd_install)
 
     # remove
-    rem_p = sub.add_parser("remove", help="Remove module from registry")
-    rem_p.add_argument("module")
+    s = sub.add_parser("remove", help="Uninstall a module.")
+    s.add_argument("module")
+    s.add_argument("--dry-run", action="store_true")
+    s.add_argument("-y", "--yes", action="store_true")
+    s.set_defaults(fn=cmd_remove)
 
     # status
-    sub.add_parser("status", help="Show installed modules")
+    s = sub.add_parser("status", help="Show installed modules.")
+    s.set_defaults(fn=cmd_status)
 
     # verify
-    ver_p = sub.add_parser("verify", help="Verify module integrity")
-    ver_p.add_argument("module", nargs="?", default="all")
+    s = sub.add_parser("verify", help="Verify installed modules against registry hints.")
+    s.add_argument("module", nargs="?", default="all")
+    s.set_defaults(fn=cmd_verify)
 
-    args = parser.parse_args()
-    fm = ForensicsModules()
+    # repair
+    s = sub.add_parser("repair", help="Reinstall submodules whose verifier currently fails.")
+    s.add_argument("module")
+    s.set_defaults(fn=cmd_repair)
 
-    dispatch = {
-        "list":    fm.cmd_list,
-        "info":    fm.cmd_info,
-        "install": fm.cmd_install,
-        "remove":  fm.cmd_remove,
-        "status":  fm.cmd_status,
-        "verify":  fm.cmd_verify,
-    }
+    return p
 
-    if args.command in dispatch:
-        dispatch[args.command](args)
-    else:
-        parser.print_help()
-        print(f"\n{YELLOW}Tip: forensics-modules list  — to see all modules{NC}\n")
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    return int(args.fn(args) or 0)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

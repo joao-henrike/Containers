@@ -1,70 +1,116 @@
-# ============================================================================
-# Professional Forensics Container - docker-compose.yml v2.1.0-FINAL
-# ============================================================================
-# CHANGELOG desta versão:
-#   - FIX: Tag 'version:' removida (obsoleta no Docker Compose V2, causava warning)
-#   - FIX: Bloco 'deploy > resources' com limites estáticos (cpus/memory) removido
-#          O container agora escala dinamicamente com todos os recursos do host
-#   - FIX: Volume de chaves apontado para /opt/forensics/quantum-keys (local exato
-#          onde o script ML-DSA-65 busca as chaves para liberar acesso root)
-#   - FEAT: privileged: true mantido (necessário para tcpdump/tshark e chattr +a)
-#   - FEAT: hostname e container_name definidos para clareza de identificação
-# ============================================================================
+# ==============================================================================
+# Forensics Professional — Docker Compose
+# ==============================================================================
+# Quick start:
+#   docker compose build
+#   docker compose up -d
+#   docker compose exec forensics bash
+#
+# Privileged mode is OFF by default. If you need to mount disk images via loop
+# devices for live analysis, copy this file to docker-compose.override.yml and
+# add `privileged: true` (see docs/PRIVILEGED_MODE.md for the trade-offs).
+# ==============================================================================
 
 services:
-  forensics-workstation:
+  forensics:
     build:
       context: .
       dockerfile: Dockerfile
-    image: forensics-professional:v2.1.0-FINAL
+      args:
+        UBUNTU_VERSION: "22.04"
+    image: forensics-professional:3.0.0
     container_name: forensics-workstation
     hostname: forensics-lab
+    restart: unless-stopped
 
-    # Mantém o container ativo e interativo para uso do shell forense
+    # Interactive shell
     stdin_open: true
     tty: true
 
-    # Modo privilegiado é obrigatório para:
-    #   - Capturas de pacote avançadas (tcpdump, tshark)
-    #   - Montagem de partições via loop device
-    #   - Atributos de imutabilidade (chattr +a nos logs de auditoria)
-    privileged: true
+    # ── Privilege model ──────────────────────────────────────────────────────
+    # No privileged: true. Specific capabilities only.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN              # entrypoint fixes mounted-volume ownership
+      - DAC_OVERRIDE       # read evidence regardless of user perms
+      - FOWNER             # chmod on owned files
+      - SETGID
+      - SETUID
+      - NET_RAW            # tcpdump / packet capture
+      - NET_ADMIN          # interface configuration
+      - SYS_PTRACE         # strace / ltrace for live analysis
+      - LINUX_IMMUTABLE    # chattr +a on the audit log
 
-    # Sem bloco 'deploy > resources' — o container usa os recursos disponíveis
-    # dinamicamente, evitando erros em hosts com menos de 8 CPUs ou 16 GB RAM.
+    # Block any new privilege gains beyond the cap_add list above.
+    security_opt:
+      - no-new-privileges:true
+      # AppArmor is intentionally left to the default Docker profile.
 
+    # ── Resources (override per host) ────────────────────────────────────────
+    # Compose v2 honours these directly; no `deploy:` block needed.
+    mem_reservation: 2g
+    pids_limit: 4096
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+    # ── Environment ─────────────────────────────────────────────────────────
     environment:
-      - TZ=UTC
-      - FORENSICS_VERSION=2.1.0-FINAL
-      - FORENSICS_USER=sherlock
+      TZ: UTC
+      FORENSICS_USER: sherlock
+      FORENSICS_HOST_UID: "${HOST_UID:-1000}"
+      FORENSICS_HOST_GID: "${HOST_GID:-1000}"
 
+    # ── Volumes ─────────────────────────────────────────────────────────────
     volumes:
-      # /evidence: SOMENTE LEITURA — evidências não podem ser alteradas ou deletadas
-      - ./evidence:/evidence:ro
+      # Evidence: read-only — cannot be modified or deleted from inside.
+      - type: bind
+        source: ./evidence
+        target: /evidence
+        read_only: true
 
-      # /cases: leitura e escrita — diretório de trabalho do analista
-      - ./cases:/cases
+      # Working directory for the analyst
+      - type: bind
+        source: ./cases
+        target: /cases
 
-      # /logs → /var/log/forensics: audit logs imutáveis (append-only via chattr +a)
-      - ./logs:/var/log/forensics
+      # Audit logs (persisted across container restarts)
+      - type: bind
+        source: ./logs
+        target: /var/log/forensics
 
-      # /keys → /opt/forensics/quantum-keys: chaves pós-quânticas (ML-DSA-65)
-      # Este é o caminho exato que o script de autenticação PQC consulta
-      - ./keys:/opt/forensics/quantum-keys
+      # Cryptographic keys (Ed25519, GPG, optional ML-DSA-65)
+      - type: bind
+        source: ./keys
+        target: /opt/forensics/quantum-keys
 
-      # /reports: relatórios assinados digitalmente gerados pelo analista
-      - ./reports:/reports
+      # Generated reports
+      - type: bind
+        source: ./reports
+        target: /reports
 
-      # /config: configurações personalizadas do analista e do sistema
-      - ./config:/etc/forensics
+      # User configuration overrides
+      - type: bind
+        source: ./config
+        target: /etc/forensics
+        read_only: true
 
-    # Política de restart: reinicia automaticamente se o container cair
-    restart: unless-stopped
+    # ── Healthcheck (defined in Dockerfile) is honoured automatically ───────
 
-    # Labels de identificação e metadados
     labels:
-      - "forensics.version=2.1.0"
-      - "forensics.compliance=NIST-SP-800-86"
-      - "forensics.crypto=Post-Quantum"
-      - "forensics.user=sherlock"
-      - "maintainer=joao-henrike"
+      org.opencontainers.image.title: "forensics-professional"
+      org.opencontainers.image.version: "3.0.0"
+      forensics.compliance: "NIST-SP-800-86"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# To use Docker secrets (recommended for production), uncomment below and
+# replace the bind mount in `volumes:` for ./keys with the secret path.
+#
+# secrets:
+#   pqc_private_key:
+#     file: ./keys/dilithium_private.key.enc
+#   gpg_passphrase:
+#     file: ./keys/.gpg.passphrase
+# ──────────────────────────────────────────────────────────────────────────────

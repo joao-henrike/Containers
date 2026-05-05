@@ -1,297 +1,286 @@
+# syntax=docker/dockerfile:1.7
 # ==============================================================================
-# Professional Forensics Container - Dockerfile v2.1.0-FINAL
-# Autor: joao-henrike | Compliance: NIST SP 800-86
+# Professional Forensics Container — Dockerfile
+# ==============================================================================
+# Build:  docker buildx build --tag forensics-professional:3.0.0 .
+# Run:    docker compose up -d
 # ==============================================================================
 #
-# CORREÇÕES CRÍTICAS INCORPORADAS (extraídas da bateria de testes):
-#
-#  [FIX-1] openssl rand -base64 32 → echo "sherlock:forensics" | chpasswd
-#           Causa: erro de subshell (exit code 1) ao criar senha do usuário
-#
-#  [FIX-2] Pacote 'yq' REMOVIDO do apt-get
-#           Causa: não possui installation candidate no Ubuntu 22.04 (exit code 100)
-#
-#  [FIX-3] Pacote 'hashlib' REMOVIDO do pip3
-#           Causa: módulo nativo do Python, causava legacy-install-failure
-#
-#  [FIX-4] Pacote 'requests' ADICIONADO ao pip3
-#           Causa: ModuleNotFoundError ao invocar forensics-modules
-#
-#  [FIX-5] /var/log/forensics/telemetry CRIADO explicitamente
-#           Causa: PermissionError no Flight Recorder (telemetry collector)
-#
-#  [FIX-6] chown -R sherlock:sherlock /cases
-#           Causa: Permission denied ao criar arquivos de análise em /cases
-#
-#  [FIX-7] software-properties-common ADICIONADO
-#           Causa: add-apt-repository necessário para Plaso via PPA
-#
-#  [FIX-8] Conflito urllib3/Python 3.10 → pip3 install --upgrade urllib3 requests
-#           Causa: ImportError: cannot import name 'Mapping' from 'collections'
-#
-#  [FIX-9] COPY config/ → diretório deve existir no host (criado via .gitkeep)
-#           Causa: "failed to compute cache key: /config not found"
-#
-#  [FIX-10] asyncio REMOVIDO do pip3 (módulo nativo desde Python 3.4)
-#            Causa: pip ignorava silenciosamente, mas gerava warnings
-#
-#  [FIX-11] tabulate, rich, psutil ADICIONADOS
-#            Causa: ImportError em forensics-modules list e forensics-health
-#
-#  [FEAT-1] attr ADICIONADO (necessário para chattr +a nos logs)
-#  [FEAT-2] default-jdk ADICIONADO (necessário para ABE - Android Backup Extractor)
-#  [FEAT-3] Symlinks automáticos para PATH do sistema
-#  [FEAT-4] PYTHONPATH configurado para /opt/forensics/core
-#  [FEAT-5] passwd -l root (desabilita login direto de root)
+# Design notes
+# ------------
+# • Multi-stage: builder compiles liboqs (post-quantum), runtime stays slim.
+# • Honest privilege model: sherlock runs everything; sudo restricted to
+#   apt-get/pip via /etc/sudoers.d/sherlock-forensics (no shell escalation).
+# • gosu is installed and verified — the entrypoint relies on it.
+# • USER sherlock is the default; root is disabled (passwd -l).
+# • HEALTHCHECK exposes liveness to docker/compose orchestration.
+# • All Python deps are pinned in requirements.txt.
 # ==============================================================================
 
-# ==============================================================================
-# STAGE 1: PQC Builder — Criptografia Pós-Quântica (liboqs)
-# Compila Kyber (KEM) + ML-DSA-65/Dilithium (assinatura digital)
-# ==============================================================================
-FROM ubuntu:22.04 AS pqc-builder
+ARG UBUNTU_VERSION=22.04
+ARG GOSU_VERSION=1.17
+
+# ──────────────────────────────────────────────────────────────────────────────
+# STAGE 1 — Post-Quantum Cryptography builder (liboqs)
+# ──────────────────────────────────────────────────────────────────────────────
+FROM ubuntu:${UBUNTU_VERSION} AS pqc-builder
 
 LABEL stage="pqc-builder"
 
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    build-essential \
-    cmake \
-    git \
-    ninja-build \
-    && rm -rf /var/lib/apt/lists/*
+ARG LIBOQS_REF=0.11.0
+
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        build-essential \
+        cmake \
+        ninja-build \
+        git \
+        ca-certificates \
+        libssl-dev \
+ && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/build
 
-# Open Quantum Safe — biblioteca pós-quântica NIST-aprovada
-RUN git clone --depth 1 --branch main \
-    https://github.com/open-quantum-safe/liboqs.git
+# Pin liboqs to a known-good release tag.
+RUN git clone --depth 1 --branch "${LIBOQS_REF}" \
+        https://github.com/open-quantum-safe/liboqs.git
 
 WORKDIR /opt/build/liboqs/build
 
 RUN cmake -GNinja \
-    -DCMAKE_INSTALL_PREFIX=/usr/local \
-    -DOQS_USE_OPENSSL=ON \
-    -DBUILD_SHARED_LIBS=ON \
-    .. \
-    && ninja \
-    && ninja install
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DOQS_USE_OPENSSL=ON \
+        -DBUILD_SHARED_LIBS=ON \
+        -DOQS_BUILD_ONLY_LIB=ON \
+        .. \
+ && ninja -j"$(nproc)" \
+ && ninja install
 
-# ==============================================================================
-# STAGE 2: Runtime Forensics — Imagem Final
-# ==============================================================================
-FROM ubuntu:22.04
 
-LABEL maintainer="joao-henrike" \
-      version="2.1.0-FINAL" \
-      description="Professional Forensics Container — Post-Quantum Cryptography" \
-      compliance="NIST SP 800-86" \
-      cryptography="Post-Quantum ML-DSA-65 (Dilithium) + Ed25519 + GPG"
+# ──────────────────────────────────────────────────────────────────────────────
+# STAGE 2 — Runtime image
+# ──────────────────────────────────────────────────────────────────────────────
+FROM ubuntu:${UBUNTU_VERSION}
 
-# ==============================================================================
-# 1. USUÁRIO ANALISTA (sherlock)
-# ==============================================================================
-# FIX-1: openssl rand gerava exit code 1. Substituído por chpasswd.
-RUN groupadd -r sherlock -g 1000 \
-    && useradd -r -g sherlock -u 1000 -m -s /bin/bash sherlock \
-    && echo "sherlock:forensics" | chpasswd
+ARG GOSU_VERSION
+ARG VERSION=3.0.0
 
-# Grupo forense read-only — protege evidências de escrita acidental
-RUN groupadd -r forensics-ro -g 1001 \
-    && usermod -aG forensics-ro sherlock
+LABEL org.opencontainers.image.title="forensics-professional" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.description="Digital forensics workstation with auditable evidence handling" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.source="https://github.com/joao-henrike/Containers" \
+      org.opencontainers.image.authors="joao-henrike" \
+      forensics.compliance="NIST-SP-800-86" \
+      forensics.crypto="Ed25519 + GPG; optional ML-DSA-65"
 
-# ==============================================================================
-# 2. ESTRUTURA DE DIRETÓRIOS
-# ==============================================================================
-# FIX-5: /var/log/forensics/telemetry precisa existir para o Flight Recorder
-# FIX-6: /cases precisa de permissão de escrita para o sherlock desde o build
-RUN mkdir -p \
-    /evidence \
-    /cases \
-    /keys \
-    /logs \
-    /reports \
-    /config \
-    /var/log/forensics \
-    /var/log/forensics/telemetry \
-    /var/log/forensics/installations \
-    /var/log/forensics/chain-of-custody \
-    /opt/forensics/tools \
-    /opt/forensics/bin \
-    /opt/forensics/core \
-    /opt/forensics/modules/installed \
-    /opt/forensics/modules/manifests \
-    /opt/forensics/quantum-keys \
-    /opt/forensics/chain-logger \
-    /opt/quantum-crypto
+# ──────────────────────────────────────────────────────────────────────────────
+# 1. Base packages
+# ──────────────────────────────────────────────────────────────────────────────
+# Notes
+#   - 'sudo' is required so sherlock can drive apt-get for module installs.
+#     Restricted via /etc/sudoers.d/ to specific commands only.
+#   - 'gosu' replaces the unreliable su fallback in the entrypoint.
+#   - 'attr' is required for chattr +a on the audit log.
+#   - 'tini' as PID 1 reaps zombies and forwards signals.
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        # init / privilege drop
+        tini \
+        sudo \
+        ca-certificates \
+        # Shell utilities
+        bash-completion \
+        vim-tiny \
+        nano \
+        tmux \
+        less \
+        # VCS & networking
+        git \
+        curl \
+        wget \
+        openssh-client \
+        # Data processing
+        jq \
+        parallel \
+        # System monitoring
+        htop \
+        tree \
+        rsync \
+        sysstat \
+        iotop \
+        nethogs \
+        procps \
+        # Python
+        python3 \
+        python3-pip \
+        python3-venv \
+        python-is-python3 \
+        # Cryptography
+        openssl \
+        gnupg \
+        # Binary analysis baseline
+        file \
+        binutils \
+        strace \
+        ltrace \
+        # Compression
+        unzip \
+        p7zip-full \
+        gzip \
+        bzip2 \
+        xz-utils \
+        # Network basics
+        net-tools \
+        iproute2 \
+        iputils-ping \
+        dnsutils \
+        # APT helpers (some modules add PPAs)
+        software-properties-common \
+        gpg-agent \
+        # Filesystem attributes (chattr)
+        attr \
+        # Java (Android Backup Extractor)
+        default-jre-headless \
+        # SQLite (mobile module)
+        sqlite3 \
+        # tmpwatch-style cleanup
+        cron \
+ && rm -rf /var/lib/apt/lists/*
 
-# FIX-6: sherlock precisa de escrita em /cases e /reports desde o build
-RUN chown -R sherlock:sherlock /cases \
-    && chown -R sherlock:sherlock /reports \
-    && chown -R sherlock:sherlock /opt/forensics \
-    && chown -R sherlock:sherlock /var/log/forensics
+# ──────────────────────────────────────────────────────────────────────────────
+# 2. gosu — verified install (https://github.com/tianon/gosu)
+# ──────────────────────────────────────────────────────────────────────────────
+RUN set -eux; \
+    arch="$(dpkg --print-architecture | awk -F- '{print $NF}')"; \
+    curl -fsSL -o /usr/local/bin/gosu \
+        "https://github.com/tianon/gosu/releases/download/${GOSU_VERSION}/gosu-${arch}"; \
+    curl -fsSL -o /tmp/gosu.asc \
+        "https://github.com/tianon/gosu/releases/download/${GOSU_VERSION}/gosu-${arch}.asc"; \
+    GNUPGHOME="$(mktemp -d)"; export GNUPGHOME; \
+    gpg --batch --keyserver hkps://keys.openpgp.org \
+        --recv-keys B42F6819007F00F88E364FD4036A9C25BF357DD4 \
+     || gpg --batch --keyserver hkps://keyserver.ubuntu.com \
+        --recv-keys B42F6819007F00F88E364FD4036A9C25BF357DD4; \
+    gpg --batch --verify /tmp/gosu.asc /usr/local/bin/gosu; \
+    rm -rf "$GNUPGHOME" /tmp/gosu.asc; \
+    chmod +x /usr/local/bin/gosu; \
+    gosu --version; \
+    gosu nobody true
 
-# ==============================================================================
-# 3. DEPENDÊNCIAS BASE (APT)
-# ==============================================================================
-# FIX-2: 'yq' removido (não existe no Ubuntu 22.04 padrão)
-# FIX-7: software-properties-common adicionado (add-apt-repository para Plaso)
-# FEAT-1: attr adicionado (chattr +a para imutabilidade dos logs)
-# FEAT-2: default-jdk adicionado (ABE - Android Backup Extractor compila com Gradle)
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    # Shell e utilitários base
-    bash-completion \
-    vim \
-    nano \
-    tmux \
-    screen \
-    # Controle de versão e rede
-    git \
-    curl \
-    wget \
-    # Processamento de dados
-    jq \
-    parallel \
-    # Monitoramento e diagnóstico
-    htop \
-    tree \
-    rsync \
-    sysstat \
-    iotop \
-    nethogs \
-    # Python runtime
-    python3 \
-    python3-pip \
-    python3-venv \
-    python-is-python3 \
-    # Criptografia
-    openssl \
-    gnupg \
-    gpg \
-    # Análise binária
-    file \
-    binutils \
-    strace \
-    ltrace \
-    # Compressão
-    unzip \
-    p7zip-full \
-    gzip \
-    bzip2 \
-    xz-utils \
-    # Rede
-    net-tools \
-    iproute2 \
-    iputils-ping \
-    dnsutils \
-    # Repositórios dinâmicos (Plaso, ferramentas externas)
-    software-properties-common \
-    # Atributos de filesystem (chattr +a para logs imutáveis)
-    attr \
-    # Java (ABE - Android Backup Extractor)
-    default-jdk \
-    # SQLite (backup-extractors)
-    sqlite3 \
-    && rm -rf /var/lib/apt/lists/*
-
-# ==============================================================================
-# 4. INJEÇÃO DA CRIPTOGRAFIA PÓS-QUÂNTICA (liboqs)
-# ==============================================================================
+# ──────────────────────────────────────────────────────────────────────────────
+# 3. Liboqs from builder stage
+# ──────────────────────────────────────────────────────────────────────────────
 COPY --from=pqc-builder /usr/local/lib/liboqs.so*    /usr/local/lib/
 COPY --from=pqc-builder /usr/local/include/oqs       /usr/local/include/oqs/
-
 RUN ldconfig
 
-# ==============================================================================
-# 5. DEPENDÊNCIAS PYTHON (PIP)
-# ==============================================================================
-# FIX-3: 'hashlib' removido — nativo do Python, quebrava o pip
-# FIX-4: 'requests' adicionado — necessário para forensics-modules
-# FIX-8: urllib3 e requests atualizados para corrigir ImportError no Python 3.10
-#        (collections.Mapping → collections.abc.Mapping)
-# FIX-10: 'asyncio' removido — nativo do Python desde 3.4
-# FIX-11: tabulate, rich, psutil adicionados — necessários para forensics-modules list
-RUN pip3 install --no-cache-dir \
-    cryptography \
-    pycryptodome \
-    PyNaCl \
-    pefile \
-    python-magic \
-    yara-python \
-    aiofiles \
-    python-dateutil \
-    requests \
-    urllib3 \
-    tabulate \
-    rich \
-    psutil \
-    androguard \
-    pymisp \
-    OTXv2 \
-    sigma-cli
+# ──────────────────────────────────────────────────────────────────────────────
+# 4. Python dependencies
+# ──────────────────────────────────────────────────────────────────────────────
+COPY requirements.txt /tmp/requirements.txt
+RUN pip3 install --no-cache-dir --break-system-packages \
+        --upgrade pip setuptools wheel \
+ && pip3 install --no-cache-dir --break-system-packages \
+        -r /tmp/requirements.txt \
+ && rm /tmp/requirements.txt
 
-# ==============================================================================
-# 6. INJEÇÃO DA ESTRUTURA DO REPOSITÓRIO
-# ==============================================================================
-# FIX-9: config/ deve existir no host (garantido via config/.gitkeep)
-COPY core/                             /opt/forensics/core/
-COPY scripts/                          /opt/forensics/bin/
-COPY config/                           /etc/forensics/
-COPY docs/banner.txt                   /etc/motd
-COPY modules/registry.json             /opt/forensics/modules/registry.json
-COPY docker-entrypoint.sh              /usr/local/bin/
+# ──────────────────────────────────────────────────────────────────────────────
+# 5. Users & groups
+# ──────────────────────────────────────────────────────────────────────────────
+# • sherlock (uid 1000)        — analyst account, runs everything
+# • forensics-ro (gid 1001)    — read-only group for evidence access
+# • Root password disabled. Sherlock has no password (set via `passwd -d`),
+#   sudoers rules below explicitly restrict what it may run with privilege.
+RUN groupadd -r -g 1000 sherlock \
+ && useradd  -r -g sherlock -u 1000 -m -s /bin/bash sherlock \
+ && passwd   -d sherlock \
+ && groupadd -r -g 1001 forensics-ro \
+ && usermod  -aG forensics-ro sherlock \
+ && passwd   -l root
 
-# ==============================================================================
-# 7. PERMISSÕES E SYMLINKS
-# ==============================================================================
+# Sudoers rule — explicit commands only, no shell escalation.
+COPY config/sudoers.d-sherlock /etc/sudoers.d/sherlock-forensics
+RUN chmod 0440 /etc/sudoers.d/sherlock-forensics \
+ && visudo -cf /etc/sudoers.d/sherlock-forensics
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 6. Filesystem layout
+# ──────────────────────────────────────────────────────────────────────────────
+RUN mkdir -p \
+        /evidence \
+        /cases \
+        /keys \
+        /reports \
+        /etc/forensics \
+        /var/log/forensics \
+        /var/log/forensics/installations \
+        /var/log/forensics/chain-of-custody \
+        /var/log/forensics/telemetry \
+        /var/log/forensics/auth \
+        /opt/forensics/bin \
+        /opt/forensics/core \
+        /opt/forensics/tools \
+        /opt/forensics/modules/installed \
+        /opt/forensics/modules/manifests \
+        /opt/forensics/quantum-keys \
+        /opt/forensics/chain-logger \
+ && chown -R sherlock:sherlock \
+        /cases \
+        /reports \
+        /var/log/forensics \
+        /opt/forensics \
+ && chmod 0750 /opt/forensics/quantum-keys
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 7. Application files
+# ──────────────────────────────────────────────────────────────────────────────
+COPY --chown=sherlock:sherlock core/                /opt/forensics/core/
+COPY --chown=sherlock:sherlock scripts/             /opt/forensics/bin/
+COPY --chown=sherlock:sherlock modules/registry.json /opt/forensics/modules/registry.json
+COPY --chown=sherlock:sherlock config/              /etc/forensics/
+COPY --chown=sherlock:sherlock docs/banner.txt      /etc/motd
+COPY --chown=sherlock:sherlock VERSION              /opt/forensics/VERSION
+COPY docker-entrypoint.sh                           /usr/local/bin/docker-entrypoint.sh
+
+# Permissions & PATH-friendly symlinks
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
-    && find /opt/forensics/bin  -type f -exec chmod +x {} \; \
-    && find /opt/forensics/core -name "*.sh" -exec chmod +x {} \; \
-    && find /opt/forensics/core -name "forensics-*" -exec chmod +x {} \;
+ && find /opt/forensics/bin  -type f -exec chmod +x {} + \
+ && find /opt/forensics/core -name "*.sh" -exec chmod +x {} + \
+ && find /opt/forensics/core -name "forensics-*" -exec chmod +x {} + \
+ && ln -sf /opt/forensics/core/module-manager/forensics-modules /usr/local/bin/forensics-modules \
+ && ln -sf /opt/forensics/core/audit-system/forensics-audit     /usr/local/bin/forensics-audit \
+ && ln -sf /opt/forensics/bin/forensics-health                  /usr/local/bin/forensics-health \
+ && ln -sf /opt/forensics/core/audit-system/quantum-root        /usr/local/bin/quantum-root \
+ && ln -sf /opt/forensics/core/audit-system/quantum-root        /usr/local/bin/qroot
 
-# Symlinks para PATH global — permite chamar sem prefixo de caminho
-RUN ln -sf /opt/forensics/core/module-manager/forensics-modules \
-           /usr/local/bin/forensics-modules \
-    && ln -sf /opt/forensics/core/audit-system/forensics-audit \
-              /usr/local/bin/forensics-audit \
-    && ln -sf /opt/forensics/bin/forensics-health \
-              /usr/local/bin/forensics-health
-
-# Compilar verificador de assinatura ML-DSA-65 (se código C existir)
-# Este binário é usado pelo quantum-root para autenticação pós-quântica
-RUN if [ -f "/opt/forensics/core/audit-system/quantum_verify.c" ]; then \
-    gcc -o /usr/local/bin/quantum_verify \
-        /opt/forensics/core/audit-system/quantum_verify.c \
-        -loqs -I/usr/local/include -L/usr/local/lib \
-    && chmod 755 /usr/local/bin/quantum_verify; \
-    fi
-
-# ==============================================================================
-# 8. SEGURANÇA FINAL
-# ==============================================================================
-# Desabilitar login direto de root (acesso somente via quantum-root + PQC key)
-RUN passwd -l root
-
-# Append-only nos logs de auditoria (imutabilidade via chattr)
-# Não pode ser feito no build — depende do filesystem do host em runtime
-# É executado no docker-entrypoint.sh com privileged mode
-
-# ==============================================================================
-# 9. VARIÁVEIS DE AMBIENTE
-# ==============================================================================
-ENV FORENSICS_VERSION="2.1.0-FINAL" \
-    FORENSICS_USER="sherlock" \
-    FORENSICS_HOME="/opt/forensics" \
+# ──────────────────────────────────────────────────────────────────────────────
+# 8. Environment
+# ──────────────────────────────────────────────────────────────────────────────
+ENV FORENSICS_HOME="/opt/forensics" \
     FORENSICS_LOGS="/var/log/forensics" \
     FORENSICS_MODULES="/opt/forensics/modules" \
     FORENSICS_KEYS="/opt/forensics/quantum-keys" \
-    PYTHONPATH="/opt/forensics/core:/opt/forensics/core/audit-system" \
-    PATH="/opt/forensics/bin:/opt/forensics/core/module-manager:/opt/forensics/core/audit-system:/usr/local/bin:$PATH" \
-    TZ="UTC" \
-    LANG="en_US.UTF-8" \
-    DEBIAN_FRONTEND="noninteractive"
+    FORENSICS_CONFIG="/etc/forensics" \
+    PYTHONPATH="/opt/forensics/core:/opt/forensics/core/audit-system:/opt/forensics/core/module-manager" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/forensics/bin:/opt/forensics/core/module-manager:/opt/forensics/core/audit-system:/usr/local/bin:${PATH}" \
+    TZ=UTC \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
 
-# ==============================================================================
-# 10. ENTRYPOINT
-# ==============================================================================
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+# ──────────────────────────────────────────────────────────────────────────────
+# 9. Healthcheck
+# ──────────────────────────────────────────────────────────────────────────────
+HEALTHCHECK --interval=60s --timeout=10s --start-period=20s --retries=3 \
+    CMD forensics-health quick-check --silent || exit 1
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 10. Entrypoint
+# ──────────────────────────────────────────────────────────────────────────────
+# tini is PID 1 → forwards signals & reaps zombies.
+# docker-entrypoint.sh runs as root (privileged init), then drops to sherlock.
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/docker-entrypoint.sh"]
 CMD ["bash"]

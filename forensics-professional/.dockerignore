@@ -1,0 +1,76 @@
+# ==============================================================================
+# Build context exclusions — keep the image small & avoid leaking host data
+# ==============================================================================
+
+# Forensic data — NEVER copy into the image
+evidence/*
+!evidence/.gitkeep
+cases/*
+!cases/.gitkeep
+reports/*
+!reports/.gitkeep
+keys/*
+!keys/.gitkeep
+logs/*
+!logs/.gitkeep
+modules/installed/*
+!modules/installed/.gitkeep
+
+# Forensic image extensions
+*.dd
+*.img
+*.raw
+*.E01
+*.Ex01
+*.L01
+*.Lx01
+*.AFF
+*.vmdk
+*.vdi
+*.vhd
+*.mem
+*.dmp
+*.pcap
+*.pcapng
+
+# Cryptographic material
+*.key
+*.pem
+*.gpg
+*.asc
+*.p12
+*.pfx
+
+# VCS & CI
+.git
+.gitignore
+.github
+
+# Documentation (kept on disk, not in the image)
+*.md
+!core/**/*.md
+docs/
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+.venv
+venv
+env
+
+# Editor / OS
+.vscode
+.idea
+*.swp
+.DS_Store
+Thumbs.db
+
+# Tests (run on host, not in image)
+tests/

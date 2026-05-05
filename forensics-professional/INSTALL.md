@@ -1,413 +1,157 @@
-# Installation Guide
+# Installation
 
-Complete installation instructions for Professional Forensics Container.
+## Requirements
 
-## 📋 Prerequisites
+| Component        | Minimum               | Notes                                    |
+| :--------------- | :-------------------- | :--------------------------------------- |
+| Docker Engine    | 24.0                  | Older versions lack BuildKit defaults.   |
+| Docker Compose   | v2 (plugin form)      | `docker compose`, not `docker-compose`.  |
+| Linux kernel     | 5.10+                 | For up-to-date capability semantics.     |
+| Disk             | 12 GB free            | Image + 2 GB working room for evidence.  |
+| RAM              | 4 GB available        | More if you run memory analysis.         |
+| CPU architecture | x86_64                | ARM64 builds work but most modules ship  |
+|                  |                       | x86_64 binaries only.                    |
 
-### System Requirements
+> macOS and Windows users: Docker Desktop works for everything except
+> kernel-level memory acquisition (LiME) and disk loop-mounting. For
+> those, run on a Linux host.
 
-**Minimum:**
-- CPU: 4 cores
-- RAM: 8 GB
-- Disk: 50 GB free space
-- OS: Any Linux distribution with kernel 3.10+
-
-**Recommended:**
-- CPU: 8+ cores
-- RAM: 16 GB
-- Disk: 100 GB free space (SSD preferred)
-- OS: Ubuntu 22.04, Debian 12, or Kali Linux 2024+
-
-### Software Requirements
-
-- **Docker Engine** 20.10 or higher
-- **Docker Compose** 1.29 or higher
-- **Git** (for cloning repository)
-
----
-
-## 🐧 Installation by Operating System
-
-### Ubuntu / Debian
+## 1. Clone
 
 ```bash
-# 1. Update system
-sudo apt update && sudo apt upgrade -y
-
-# 2. Install Docker
-sudo apt install -y docker.io docker-compose git
-
-# 3. Start Docker service
-sudo systemctl start docker
-sudo systemctl enable docker
-
-# 4. Add your user to docker group
-sudo usermod -aG docker $USER
-
-# 5. Logout and login again (or run: newgrp docker)
-
-# 6. Verify Docker works
-docker run hello-world
+git clone https://github.com/joao-henrike/Containers.git
+cd Containers/forensics-professional
 ```
 
-### Kali Linux
+## 2. Build
 
 ```bash
-# Docker usually pre-installed, but if not:
-sudo apt update
-sudo apt install -y docker.io docker-compose git
-
-# Start service
-sudo systemctl start docker
-sudo systemctl enable docker
-
-# Add user to group
-sudo usermod -aG docker $USER
-
-# Logout/login, then verify
-docker run hello-world
+docker compose build
 ```
 
-### Fedora / CentOS / Rocky Linux
+Build time depends on network speed; expect 10–20 minutes on a fresh
+machine. The slowest step is compiling liboqs (the post-quantum library)
+in the builder stage.
+
+To pin the host UID/GID to your local user (so files written into
+`./cases` aren't owned by 1000 if you happen to use a different ID):
 
 ```bash
-# Fedora
-sudo dnf install -y docker docker-compose git
-sudo systemctl start docker
-sudo systemctl enable docker
-
-# CentOS/Rocky
-sudo yum install -y docker docker-compose git
-sudo systemctl start docker
-sudo systemctl enable docker
-
-# Add user to group
-sudo usermod -aG docker $USER
-
-# Logout/login, then verify
-docker run hello-world
+HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose build
 ```
 
-### Arch Linux
+## 3. Start
 
 ```bash
-# Install Docker
-sudo pacman -S docker docker-compose git
-
-# Start service
-sudo systemctl start docker
-sudo systemctl enable docker
-
-# Add user to group
-sudo usermod -aG docker $USER
-
-# Logout/login, then verify
-docker run hello-world
+docker compose up -d
 ```
 
-### Windows (WSL2)
+The container performs first-boot setup automatically:
+
+1. Creates `/var/log/forensics/audit.log` with the genesis entry.
+2. Generates an Ed25519 audit-signing keypair under
+   `/opt/forensics/quantum-keys/`.
+3. Generates a passphrase-protected GPG key.
+4. Marks the audit log as append-only (`chattr +a`) when the host
+   filesystem supports it.
+
+## 4. Enter the container
 
 ```bash
-# 1. Install Docker Desktop for Windows from:
-#    https://www.docker.com/products/docker-desktop/
-
-# 2. Enable WSL2 integration in Docker Desktop settings
-
-# 3. In WSL2 terminal (Ubuntu/Debian):
-sudo apt update
-sudo apt install -y git
-
-# Docker is managed by Docker Desktop
-# Verify:
-docker run hello-world
+docker compose exec forensics bash
 ```
 
-### macOS
+You'll land in the `sherlock` account. Verify everything is healthy:
 
 ```bash
-# 1. Install Docker Desktop for Mac from:
-#    https://www.docker.com/products/docker-desktop/
-
-# 2. Install Homebrew (if not installed):
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-# 3. Install git (if not installed):
-brew install git
-
-# Docker is managed by Docker Desktop
-# Verify:
-docker run hello-world
+forensics-health
 ```
 
----
+## 5. (Optional) Set up post-quantum authentication
 
-## 📦 Installing the Forensics Container
-
-### Method 1: Quick Install (Recommended)
+If you want `quantum-root` to actually gate privilege escalation:
 
 ```bash
-# One-liner installation
-git clone https://github.com/YOUR-USERNAME/forensics-professional.git && \
-cd forensics-professional && \
-docker-compose build && \
-docker-compose up -d && \
-echo "✅ Installation complete! Access with: docker exec -it forensics-workstation bash"
+# Inside the container
+sudo /opt/forensics/bin/generate-quantum-keys.sh
 ```
 
-### Method 2: Step-by-Step
+You'll be prompted for a passphrase; it's used to AES-encrypt the
+ML-DSA-65 private key. Store the passphrase outside the container —
+**there is no recovery** if you lose it.
+
+## 6. Install your first module
 
 ```bash
-# 1. Clone repository
-git clone https://github.com/YOUR-USERNAME/forensics-professional.git
-cd forensics-professional
-
-# 2. Verify directory structure
-ls -la
-# Should see: Dockerfile, docker-compose.yml, core/, scripts/, etc.
-
-# 3. Build the container (takes 10-15 minutes first time)
-docker-compose build
-
-# Expected output:
-# Step 1/50 : FROM ubuntu:22.04
-# Step 2/50 : LABEL maintainer...
-# ...
-# Successfully built abc123def456
-# Successfully tagged forensics-professional:2.0.0
-
-# 4. Start the container
-docker-compose up -d
-
-# Expected output:
-# Creating network "forensics-professional_default" with driver "bridge"
-# Creating forensics-workstation ... done
-
-# 5. Verify it's running
-docker ps
-
-# Expected output:
-# CONTAINER ID   IMAGE                              STATUS
-# abc123def456   forensics-professional:2.0.0       Up 10 seconds
-
-# 6. Access the shell
-docker exec -it forensics-workstation bash
-
-# You should see the forensics banner!
-```
-
----
-
-## 🔍 Verification
-
-### After Installation
-
-```bash
-# Inside the container (after docker exec -it forensics-workstation bash)
-
-# 1. Check health
-forensics-health check
-
-# Expected output:
-# ✅ Evidence directory: OK
-# ✅ Cases directory: OK
-# ✅ Cryptographic keys: OK
-# ✅ Audit log: IMMUTABLE
-# ...
-
-# 2. Verify audit system
-forensics-audit verify
-
-# Expected output:
-# ✅ VALID: Verified 1 entries successfully
-
-# 3. List available modules
 forensics-modules list
-
-# Expected output: Table with 11 modules
-
-# 4. Check user
-whoami
-# Expected: sherlock
-
-# 5. Try to access evidence (should fail - good!)
-touch /evidence/test.txt
-# Expected: Permission denied
+forensics-modules install memory-forensics --only volatility,avml
+forensics-modules verify memory-forensics
 ```
 
----
-
-## 🛠️ Troubleshooting
-
-### Issue: "docker: command not found"
+## Updating
 
 ```bash
-# Docker not installed or not in PATH
-# Solution: Install Docker (see OS-specific instructions above)
+git pull
+docker compose build
+docker compose down
+docker compose up -d
 ```
 
-### Issue: "permission denied while trying to connect to Docker daemon"
+The audit log, keys, and case files are stored in bind mounts (`./logs`,
+`./keys`, `./cases`) — they survive container rebuilds.
+
+## Uninstalling
 
 ```bash
-# User not in docker group
-# Solution:
-sudo usermod -aG docker $USER
-# Then logout/login
-
-# Or temporarily:
-newgrp docker
+docker compose down
+docker rmi forensics-professional:3.0.0
 ```
 
-### Issue: "Cannot connect to Docker daemon at unix:///var/run/docker.sock"
+To wipe persisted data too:
 
 ```bash
-# Docker service not running
-# Solution:
-sudo systemctl start docker
-sudo systemctl enable docker
+rm -rf logs/* keys/* cases/* reports/* modules/installed/*
 ```
 
-### Issue: Build fails with "no space left on device"
+> Wiping the keys directory permanently invalidates all past audit-log
+> signatures. Only do this if you intend to start a new investigation
+> chain.
+
+## Troubleshooting
+
+### Build fails on `liboqs` compile
+
+The PQC builder stage needs ~2 GB RAM. If your build machine has less,
+or if you're behind a strict proxy:
 
 ```bash
-# Not enough disk space
-# Solution:
-# 1. Check available space:
-df -h
-
-# 2. Clean Docker cache:
-docker system prune -a
-
-# 3. Free up at least 50 GB
+# Skip PQC entirely (quantum-root will be unavailable)
+docker compose build --build-arg LIBOQS_REF=skip
 ```
 
-### Issue: Build is very slow
+### `chattr: Operation not supported`
+
+Your host filesystem doesn't support `chattr +a` (common with overlayfs,
+btrfs subvolumes, tmpfs, NFS, macOS, Windows). The audit log stays
+tamper-evident via signatures; you just lose the host-level append-only
+guarantee. Move the bind mount onto an ext4 partition to get it back.
+
+### `sudo: command not found` inside the container
+
+This indicates an old image. Rebuild from scratch:
 
 ```bash
-# Normal on first build (10-15 minutes)
-# On subsequent builds, Docker uses cache (~2-3 minutes)
-
-# To speed up:
-# - Use SSD
-# - Allocate more CPU cores to Docker
-# - Check internet connection (downloads packages)
+docker compose build --no-cache
 ```
 
-### Issue: Container exits immediately
+### Container says "healthy" but `forensics-modules list` is empty
+
+The registry didn't load. Inspect the logs:
 
 ```bash
-# Check logs:
-docker-compose logs
-
-# Common causes:
-# - Syntax error in scripts
-# - Missing dependencies
-# - Permission issues
-
-# Try rebuilding:
-docker-compose down
-docker-compose build --no-cache
-docker-compose up -d
+docker compose logs forensics
 ```
 
----
-
-## 🔄 Updating
-
-### Update to Latest Version
-
-```bash
-# 1. Stop container
-docker-compose down
-
-# 2. Pull latest changes
-git pull origin main
-
-# 3. Rebuild
-docker-compose build
-
-# 4. Restart
-docker-compose up -d
-
-# 5. Your data in evidence/, cases/, keys/, logs/ is preserved!
-```
-
----
-
-## 🗑️ Uninstallation
-
-### Remove Container (Keep Data)
-
-```bash
-cd forensics-professional
-docker-compose down
-
-# Data in evidence/, cases/, keys/, logs/ is preserved
-```
-
-### Complete Removal (Including Data)
-
-```bash
-cd forensics-professional
-
-# Stop and remove container
-docker-compose down -v
-
-# Remove images
-docker rmi forensics-professional:2.0.0
-
-# Remove repository
-cd ..
-rm -rf forensics-professional
-
-# CAUTION: This deletes ALL your cases and evidence!
-```
-
----
-
-## 💾 Backup
-
-### Backup Your Work
-
-```bash
-# From host machine:
-cd forensics-professional
-
-# Backup cases
-tar -czf cases-backup-$(date +%Y%m%d).tar.gz cases/
-
-# Backup keys (IMPORTANT!)
-tar -czf keys-backup-$(date +%Y%m%d).tar.gz keys/
-
-# Backup logs
-tar -czf logs-backup-$(date +%Y%m%d).tar.gz logs/
-
-# Store backups securely!
-```
-
----
-
-## 🎓 Next Steps
-
-After successful installation:
-
-1. **Read** [QUICKSTART.md](QUICKSTART.md) for basic usage
-2. **Install** forensic modules you need
-3. **Add** your evidence to `evidence/` directory
-4. **Create** your first case in `cases/`
-5. **Start** investigating!
-
----
-
-## 📞 Support
-
-**Installation Issues:**
-- Check [Troubleshooting](#troubleshooting) section above
-- Search [GitHub Issues](https://github.com/YOUR-USERNAME/forensics-professional/issues)
-- Open a new issue if problem persists
-
-**Questions:**
-- Use [GitHub Discussions](https://github.com/YOUR-USERNAME/forensics-professional/discussions)
-
----
-
-**Happy Investigating! 🔍**
+Common cause: a bind-mounted `modules/registry.json` overriding the
+container's copy with a malformed JSON file. Either fix the JSON or
+remove the override from `docker-compose.override.yml`.

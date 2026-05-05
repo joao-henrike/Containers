@@ -1,278 +1,202 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # ==============================================================================
-# Professional Forensics Container — docker-entrypoint.sh v2.1.0-FINAL
-# Inicialização segura: root → sherlock
-# Compliance: NIST SP 800-86
+# Forensics Professional — Container Entrypoint
 # ==============================================================================
-
-set -e
-
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m'
-
-FORENSICS_HOME="/opt/forensics"
-LOGS_DIR="/var/log/forensics"
-KEYS_DIR="/opt/forensics/quantum-keys"
-AUDIT_LOG="${LOGS_DIR}/audit.log"
-
-# ==============================================================================
-# FASE 1: Inicialização como ROOT (operações privilegiadas)
+# Phase 1 (root): bootstrap directories, keys, audit log, GPG keyring
+# Phase 2:        drop privileges to sherlock via gosu and exec the user CMD
+#
+# This script is invoked by tini (PID 1). Signals are forwarded properly.
 # ==============================================================================
 
-echo -e "${CYAN}[INIT] Starting Forensics Professional Container v2.1.0-FINAL...${NC}"
+set -euo pipefail
 
-# 1.1 Garantir estrutura de diretórios de logs
-mkdir -p "${LOGS_DIR}/installations"
-mkdir -p "${LOGS_DIR}/chain-of-custody"
-mkdir -p "${LOGS_DIR}/telemetry"
-mkdir -p "${LOGS_DIR}/chain-of-custody/$(date +%Y/%m/%d)"
+# ── Constants ────────────────────────────────────────────────────────────────
+readonly FORENSICS_HOME="${FORENSICS_HOME:-/opt/forensics}"
+readonly LOGS_DIR="${FORENSICS_LOGS:-/var/log/forensics}"
+readonly KEYS_DIR="${FORENSICS_KEYS:-/opt/forensics/quantum-keys}"
+readonly AUDIT_LOG="${LOGS_DIR}/audit.log"
+readonly VERSION_FILE="${FORENSICS_HOME}/VERSION"
+readonly RUN_USER="sherlock"
 
-# 1.2 Aplicar atributo append-only nos logs (imutabilidade forense)
-# chattr +a: permite apenas acrescentar — impossível modificar ou deletar
-if command -v chattr &>/dev/null; then
-    touch "${AUDIT_LOG}" 2>/dev/null || true
-    chattr +a "${AUDIT_LOG}" 2>/dev/null || true
-    echo -e "${GREEN}[INIT] Audit log protected with chattr +a (append-only)${NC}"
+# Colours (only when stdout is a TTY)
+if [[ -t 1 ]]; then
+    readonly C_RED=$'\033[0;31m'
+    readonly C_GRN=$'\033[0;32m'
+    readonly C_YLW=$'\033[1;33m'
+    readonly C_CYN=$'\033[0;36m'
+    readonly C_NC=$'\033[0m'
+else
+    readonly C_RED='' C_GRN='' C_YLW='' C_CYN='' C_NC=''
 fi
 
-# 1.3 Proteger /evidence (read-only por permissão também)
-chmod 555 /evidence 2>/dev/null || true
+# ── Logging ──────────────────────────────────────────────────────────────────
+log()  { printf '%s[init]%s %s\n' "${C_CYN}" "${C_NC}" "$*"; }
+ok()   { printf '%s[ ok ]%s %s\n' "${C_GRN}" "${C_NC}" "$*"; }
+warn() { printf '%s[warn]%s %s\n' "${C_YLW}" "${C_NC}" "$*" >&2; }
+die()  { printf '%s[fail]%s %s\n' "${C_RED}" "${C_NC}" "$*" >&2; exit 1; }
 
-# 1.4 Corrigir permissões de escrita para sherlock
-chown -R sherlock:sherlock /cases 2>/dev/null || true
-chown -R sherlock:sherlock /reports 2>/dev/null || true
-chown -R sherlock:sherlock "${LOGS_DIR}" 2>/dev/null || true
-chown -R sherlock:sherlock "${FORENSICS_HOME}" 2>/dev/null || true
+VERSION="$(cat "${VERSION_FILE}" 2>/dev/null || echo 'unknown')"
 
-# 1.5 Inicializar sistema de chaves criptográficas
-if [ ! -f "${KEYS_DIR}/audit_ed25519.key" ]; then
-    echo -e "${YELLOW}[INIT] Generating Ed25519 signing keys...${NC}"
-    python3 << 'PYTHON' 2>/dev/null || true
-import os
-import json
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.hazmat.primitives import serialization
-
-keys_dir = "/opt/forensics/quantum-keys"
-os.makedirs(keys_dir, exist_ok=True)
-
-# Gerar par de chaves Ed25519
-private_key = Ed25519PrivateKey.generate()
-public_key = private_key.public_key()
-
-# Salvar chave privada
-priv_bytes = private_key.private_bytes(
-    encoding=serialization.Encoding.PEM,
-    format=serialization.PrivateFormat.PKCS8,
-    encryption_algorithm=serialization.NoEncryption()
-)
-with open(f"{keys_dir}/audit_ed25519.key", "wb") as f:
-    f.write(priv_bytes)
-os.chmod(f"{keys_dir}/audit_ed25519.key", 0o600)
-
-# Salvar chave pública
-pub_bytes = public_key.public_bytes(
-    encoding=serialization.Encoding.PEM,
-    format=serialization.PublicFormat.SubjectPublicKeyInfo
-)
-with open(f"{keys_dir}/audit_ed25519.pub", "wb") as f:
-    f.write(pub_bytes)
-os.chmod(f"{keys_dir}/audit_ed25519.pub", 0o644)
-
-print("Ed25519 keypair generated successfully")
-PYTHON
-    echo -e "${GREEN}[INIT] Ed25519 keys generated${NC}"
+# ── Sanity: must be PID 1 contextually (tini wraps us) and root ──────────────
+if [[ "${EUID}" -ne 0 ]]; then
+    # Already non-root — entrypoint logic skipped, just exec.
+    exec "$@"
 fi
 
-# 1.6 Inicializar GPG keyring para assinaturas
-if ! gpg --list-keys forensics-audit@professional.local &>/dev/null 2>&1; then
-    echo -e "${YELLOW}[INIT] Generating GPG key for audit signatures...${NC}"
-    cat > /tmp/gpg-params << 'GPG'
-%no-protection
+log "Forensics Professional v${VERSION} — initialising"
+
+# ── 1. Filesystem layout for mounted volumes ────────────────────────────────
+mkdir -p \
+    "${LOGS_DIR}/installations" \
+    "${LOGS_DIR}/chain-of-custody/$(date -u +%Y/%m/%d)" \
+    "${LOGS_DIR}/telemetry" \
+    "${LOGS_DIR}/auth" \
+    "${KEYS_DIR}"
+
+chown -R "${RUN_USER}:${RUN_USER}" "${LOGS_DIR}" "${KEYS_DIR}" /cases /reports || true
+chmod 0750 "${KEYS_DIR}"
+
+# Evidence is read-only by mount, but ensure no surprise perms remain.
+chmod 0555 /evidence 2>/dev/null || true
+
+# ── 2. Audit log bootstrap ───────────────────────────────────────────────────
+init_audit_log() {
+    if [[ ! -f "${AUDIT_LOG}" ]]; then
+        : > "${AUDIT_LOG}"
+        chown "${RUN_USER}:${RUN_USER}" "${AUDIT_LOG}"
+        chmod 0640 "${AUDIT_LOG}"
+    fi
+
+    # Genesis entry only if the log is empty.
+    if [[ ! -s "${AUDIT_LOG}" ]]; then
+        gosu "${RUN_USER}" python3 -m forensics.audit.bootstrap genesis \
+            --version "${VERSION}" \
+            || warn "genesis entry skipped (audit module unavailable)"
+    fi
+
+    # Append-only attribute. Best-effort: not all host filesystems support it.
+    if command -v chattr >/dev/null 2>&1; then
+        if chattr +a "${AUDIT_LOG}" 2>/dev/null; then
+            ok "audit log marked append-only (chattr +a)"
+        else
+            warn "chattr +a not supported on this filesystem — host must enforce immutability"
+        fi
+    fi
+}
+init_audit_log
+
+# ── 3. Cryptographic key bootstrap ───────────────────────────────────────────
+init_ed25519() {
+    if [[ -f "${KEYS_DIR}/audit_ed25519.key" ]]; then
+        return 0
+    fi
+    log "generating Ed25519 audit-signing keypair"
+    gosu "${RUN_USER}" python3 -m forensics.audit.keygen ed25519 \
+        --out-dir "${KEYS_DIR}" \
+        || die "failed to generate Ed25519 keypair"
+    ok "Ed25519 keypair generated"
+}
+
+init_gpg() {
+    # GPG key, protected by a randomly-generated passphrase stored in keys/.
+    local pass_file="${KEYS_DIR}/.gpg.passphrase"
+    local keyring_dir="/home/${RUN_USER}/.gnupg"
+
+    mkdir -p "${keyring_dir}"
+    chown "${RUN_USER}:${RUN_USER}" "${keyring_dir}"
+    chmod 0700 "${keyring_dir}"
+
+    if gosu "${RUN_USER}" gpg --list-keys forensics-audit@professional.local \
+            >/dev/null 2>&1; then
+        return 0
+    fi
+
+    if [[ ! -f "${pass_file}" ]]; then
+        # 32 random bytes, base64 — strong enough for the local keyring.
+        ( umask 077 && openssl rand -base64 32 > "${pass_file}" )
+        chown "${RUN_USER}:${RUN_USER}" "${pass_file}"
+        chmod 0400 "${pass_file}"
+    fi
+
+    log "generating GPG signing key (RSA-4096)"
+    local passphrase
+    passphrase="$(cat "${pass_file}")"
+    gosu "${RUN_USER}" bash -c "cat <<-EOF | gpg --batch --gen-key
+%echo Generating audit signing key
 Key-Type: RSA
 Key-Length: 4096
 Subkey-Type: RSA
 Subkey-Length: 4096
-Name-Real: Forensics Professional
+Name-Real: Forensics Audit
 Name-Email: forensics-audit@professional.local
 Expire-Date: 0
+Passphrase: ${passphrase}
 %commit
-GPG
-    gpg --batch --gen-key /tmp/gpg-params 2>/dev/null || true
-    rm -f /tmp/gpg-params
-    echo -e "${GREEN}[INIT] GPG key generated${NC}"
-fi
-
-# 1.7 Inicializar audit log (genesis entry)
-if [ ! -s "${AUDIT_LOG}" ]; then
-    echo -e "${YELLOW}[INIT] Creating genesis audit entry...${NC}"
-    python3 << 'PYTHON' 2>/dev/null || true
-import json
-import hashlib
-import datetime
-import os
-
-audit_log = "/var/log/forensics/audit.log"
-genesis = {
-    "seq": 0,
-    "timestamp": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z",
-    "event_type": "container_started",
-    "user": "system",
-    "details": {
-        "version": "2.1.0-FINAL",
-        "compliance": "NIST SP 800-86",
-        "crypto": "Ed25519 + GPG + ML-DSA-65 PQC"
-    },
-    "prev_hash": "0" * 64,
-    "hash": "",
-    "signatures": {
-        "ed25519": "genesis_entry_no_signature",
-        "gpg": "genesis_entry_no_signature"
-    }
+%echo done
+EOF" >/dev/null 2>&1 || warn "GPG key generation failed (legal-signature column will say 'unavailable')"
 }
-data = json.dumps({k: v for k, v in genesis.items() if k != "hash"}, sort_keys=True)
-genesis["hash"] = hashlib.sha256(data.encode()).hexdigest()
 
-with open(audit_log, "a") as f:
-    f.write(json.dumps(genesis) + "\n")
+init_ed25519 || true
+init_gpg || true
 
-print(f"Genesis entry created: {genesis['hash'][:16]}...")
-PYTHON
-    echo -e "${GREEN}[INIT] Audit log initialized${NC}"
-fi
+# ── 4. Sherlock shell environment ────────────────────────────────────────────
+write_bashrc() {
+    local rc="/home/${RUN_USER}/.bashrc"
+    cat > "${rc}" <<'BASHRC'
+# Forensics Professional — analyst shell
+# Auto-generated; edit /etc/forensics/bashrc.d/*.sh for permanent changes.
 
-# 1.8 Instalar bash-hooks da chain of custody (se existirem)
-if [ -f "/opt/forensics/core/audit-system/bash-hooks.sh" ]; then
-    # Copiar para chain-logger (caminho esperado pelos hooks)
-    cp /opt/forensics/core/audit-system/bash-hooks.sh \
-       /opt/forensics/chain-logger/bash-hooks.sh 2>/dev/null || true
-    chmod +x /opt/forensics/chain-logger/bash-hooks.sh 2>/dev/null || true
-fi
+[[ -f /etc/bashrc ]] && . /etc/bashrc
 
-# 1.9 Criar link para quantum-root
-if [ -f "/opt/forensics/core/audit-system/quantum-root" ]; then
-    ln -sf /opt/forensics/core/audit-system/quantum-root /usr/local/bin/quantum-root 2>/dev/null || true
-    ln -sf /usr/local/bin/quantum-root /usr/local/bin/qroot 2>/dev/null || true
-    chmod 755 /usr/local/bin/quantum-root 2>/dev/null || true
-fi
+export FORENSICS_HOME=/opt/forensics
+export FORENSICS_LOGS=/var/log/forensics
+export FORENSICS_MODULES=/opt/forensics/modules
+export FORENSICS_KEYS=/opt/forensics/quantum-keys
+export FORENSICS_CONFIG=/etc/forensics
+export PATH="/opt/forensics/bin:/opt/forensics/core/module-manager:/opt/forensics/core/audit-system:/usr/local/bin:${PATH}"
+export PYTHONPATH="/opt/forensics/core:/opt/forensics/core/audit-system:/opt/forensics/core/module-manager"
+export TZ=UTC
 
-# 1.10 Log de inicialização
-echo -e "${GREEN}[INIT] Container initialized successfully${NC}"
-echo -e "${GREEN}[INIT] Switching to user: sherlock${NC}"
+PS1='\[\033[01;36m\][forensics]\[\033[00m\] \[\033[01;32m\]\u\[\033[00m\]@\[\033[01;34m\]\h\[\033[00m\]:\[\033[01;33m\]\w\[\033[00m\]\$ '
 
-# ==============================================================================
-# FASE 2: Configurar ambiente do sherlock
-# ==============================================================================
-
-# Configurar .bashrc do sherlock com ambiente forense
-cat > /home/sherlock/.bashrc << 'BASHRC'
-# ==============================================================================
-# Forensics Professional — Shell Environment v2.1.0
-# ==============================================================================
-
-# Source global definitions
-if [ -f /etc/bashrc ]; then
-    . /etc/bashrc
-fi
-
-# Cores
-export RED='\033[0;31m'
-export GREEN='\033[0;32m'
-export YELLOW='\033[1;33m'
-export BLUE='\033[0;34m'
-export CYAN='\033[0;36m'
-export NC='\033[0m'
-
-# Variáveis de ambiente forenses
-export FORENSICS_HOME="/opt/forensics"
-export FORENSICS_LOGS="/var/log/forensics"
-export FORENSICS_MODULES="/opt/forensics/modules"
-export FORENSICS_KEYS="/opt/forensics/quantum-keys"
-export FORENSICS_VERSION="2.1.0-FINAL"
-export TZ="UTC"
-
-# PATH forense
-export PATH="/opt/forensics/bin:/opt/forensics/core/module-manager:/opt/forensics/core/audit-system:/usr/local/bin:$PATH"
-export PYTHONPATH="/opt/forensics/core:/opt/forensics/core/audit-system"
-
-# Prompt profissional
-export PS1='\[\033[01;36m\][FORENSICS] \[\033[01;32m\]\u\[\033[00m\]@\[\033[01;34m\]\h\[\033[00m\]:\[\033[01;33m\]\w\[\033[00m\]$ '
-
-# Aliases forenses úteis
 alias ll='ls -la'
 alias audit='forensics-audit'
 alias modules='forensics-modules'
 alias health='forensics-health'
-alias qroot='quantum-root'
 
-# Bash hooks para chain of custody automática
-if [[ -f /opt/forensics/chain-logger/bash-hooks.sh ]]; then
-    source /opt/forensics/chain-logger/bash-hooks.sh
+# Chain-of-custody hooks
+[[ -f /opt/forensics/core/audit-system/bash-hooks.sh ]] && \
+    source /opt/forensics/core/audit-system/bash-hooks.sh
+
+# Per-deployment hooks
+if [[ -d /etc/forensics/bashrc.d ]]; then
+    for f in /etc/forensics/bashrc.d/*.sh; do
+        [[ -r "$f" ]] && source "$f"
+    done
+    unset f
 fi
 
-# Mostrar banner na primeira vez
-if [[ -z "$FORENSICS_BANNER_SHOWN" ]]; then
+# Banner (once per session)
+if [[ -z "${FORENSICS_BANNER_SHOWN:-}" ]]; then
     export FORENSICS_BANNER_SHOWN=1
-    cat /etc/motd 2>/dev/null || true
+    [[ -f /etc/motd ]] && cat /etc/motd
 fi
 BASHRC
-
-chown sherlock:sherlock /home/sherlock/.bashrc
-
-# ==============================================================================
-# FASE 3: Logar início do container no audit trail
-# ==============================================================================
-python3 << 'PYTHON' 2>/dev/null || true
-import json
-import hashlib
-import datetime
-import os
-
-audit_log = "/var/log/forensics/audit.log"
-
-# Ler último hash
-last_hash = "0" * 64
-try:
-    with open(audit_log, "r") as f:
-        lines = [l.strip() for l in f if l.strip()]
-    if lines:
-        last_entry = json.loads(lines[-1])
-        last_hash = last_entry.get("hash", "0" * 64)
-        seq = last_entry.get("seq", -1) + 1
-    else:
-        seq = 1
-except:
-    seq = 1
-
-entry = {
-    "seq": seq,
-    "timestamp": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z",
-    "event_type": "container_started",
-    "user": "system",
-    "details": {
-        "container": "forensics-workstation",
-        "version": "2.1.0-FINAL",
-        "user_session": "sherlock"
-    },
-    "prev_hash": last_hash,
-    "hash": "",
-    "signatures": {"ed25519": "runtime_init", "gpg": "runtime_init"}
+    chown "${RUN_USER}:${RUN_USER}" "${rc}"
 }
+write_bashrc
 
-data = json.dumps({k: v for k, v in entry.items() if k != "hash"}, sort_keys=True)
-entry["hash"] = hashlib.sha256(data.encode()).hexdigest()
+# ── 5. Log container start as an audit event ─────────────────────────────────
+gosu "${RUN_USER}" python3 -m forensics.audit.bootstrap log-start \
+    --version "${VERSION}" \
+    >/dev/null 2>&1 || warn "could not append container_started audit event"
 
-with open(audit_log, "a") as f:
-    f.write(json.dumps(entry) + "\n")
-PYTHON
+ok "initialisation complete — switching to ${RUN_USER}"
 
-# ==============================================================================
-# FASE 4: Executar como sherlock
-# ==============================================================================
-exec gosu sherlock "$@" 2>/dev/null || \
-exec su -s /bin/bash sherlock -c "$*" 2>/dev/null || \
-exec su - sherlock
+# ── 6. Drop privileges and exec user CMD ─────────────────────────────────────
+# If no command supplied, default to interactive bash.
+if [[ $# -eq 0 ]]; then
+    exec gosu "${RUN_USER}" bash
+fi
+
+exec gosu "${RUN_USER}" "$@"

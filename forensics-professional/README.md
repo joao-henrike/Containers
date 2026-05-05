@@ -1,434 +1,234 @@
-# Professional Forensics Container v2.1.0
+# Forensics Professional
 
-[![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](https://github.com/joao-henrike/Containers/tree/main/forensics-professional)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/joao-henrike/Containers/blob/main/forensics-professional/LICENSE)
-[![Compliance](https://img.shields.io/badge/compliance-NIST%20SP%20800--86-orange.svg)](https://github.com/joao-henrike/Containers/blob/main/forensics-professional)
-[![Crypto](https://img.shields.io/badge/crypto-Post--Quantum-purple.svg)](https://github.com/joao-henrike/Containers/blob/main/forensics-professional)
-[![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)](https://github.com/joao-henrike/Containers/blob/main/forensics-professional)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/joao-henrike/Containers/blob/main/forensics-professional/CONTRIBUTING.md)
-[![Modules](https://img.shields.io/badge/modules-14-blue.svg)](https://github.com/joao-henrike/Containers/blob/main/forensics-professional)
-[![Tools](https://img.shields.io/badge/tools-161%2B-green.svg)](https://github.com/joao-henrike/Containers/blob/main/forensics-professional)
+[![Docker Build & Security Scan](https://github.com/joao-henrike/Containers/actions/workflows/docker-build.yml/badge.svg)](https://github.com/joao-henrike/Containers/actions/workflows/docker-build.yml)
+[![Lint](https://github.com/joao-henrike/Containers/actions/workflows/lint.yml/badge.svg)](https://github.com/joao-henrike/Containers/actions/workflows/lint.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![NIST SP 800-86](https://img.shields.io/badge/Aligned%20with-NIST%20SP%20800--86-blue)](https://csrc.nist.gov/publications/detail/sp/800-86/final)
 
-> 🔍 Container Docker profissional para forense digital com criptografia pós-quântica, audit trails imutáveis, instalação modular de ferramentas e capacidades completas de OSINT.
+A reproducible Docker workstation for digital forensics with auditable
+evidence handling, modular tool installs, and **tamper-evident** logging.
 
----
-
-## 📚 Índice
-
-- [Visão Geral](#-visão-geral)
-- [Funcionalidades Principais](#-funcionalidades-principais)
-- [Quick Start](#-quick-start)
-- [Instalação](#-instalação)
-- [Uso](#-uso)
-- [Módulos Disponíveis](#-módulos-disponíveis)
-- [Documentação](#-documentação)
-- [Contribuindo](#-contribuindo)
-- [Licença](#-licença)
-- [Suporte](#-suporte)
+> **Tamper-evident, not tamper-proof.** Read [SECURITY.md](SECURITY.md) for
+> the full threat model. The audit log is signed and hash-chained; an
+> attacker with both root and the signing key can still rewrite it.
+> External append-only storage (S3 Object Lock, etc.) is required for legal
+> non-repudiation.
 
 ---
 
-## 🎯 Visão Geral
+## Why this exists
 
-Um **container Docker de nível profissional** para forense digital com:
+Most "forensics distros" install everything by default, take 20 GB, and
+leave you to manage tool versions yourself. This project takes a different
+approach:
 
-- 🔐 **Criptografia Pós-Quântica** (Kyber/ML-DSA-65) para proteção do root
-- 📝 **Audit Trails Imutáveis** (assinaturas híbridas Ed25519 + GPG)
-- 🔗 **Chain of Custody Automatizada** — cada ação é registrada e assinada
-- 🧩 **Instalação Modular** — instale só o que você precisa
-- ⚡ **Paralelismo Agressivo** — máxima performance com todos os cores disponíveis
-- 📊 **Compliance NIST SP 800-86** — pronto para uso profissional e legal
-- 🛡️ **Evidências Protegidas** — read-only, impossível deletar por design
-- 🔍 **OSINT & Threat Intelligence** — 14 módulos no total
+- **Modular installs.** 14 module categories, install only what you need.
+- **Real verification.** Every install is verified against a registry hint
+  (binary on PATH, Python module importable, file on disk).
+- **Audited operations.** Every install/remove and every shell command run
+  by the analyst is captured in a signed, hash-chained log.
+- **Honest privilege model.** `sherlock` is the analyst account; sudo is
+  restricted to the specific apt/pip commands installers need. There is no
+  shell-via-sudo path.
 
----
-
-## 🚀 Funcionalidades Principais
-
-### Arquitetura de Segurança
-
-```
-ROOT (somente o proprietário — PQC criptografado)
-└── Protegido por criptografia pós-quântica Kyber/ML-DSA-65
-    └── Acessível apenas com a chave privada do proprietário
-
-SHERLOCK (usuário público)
-├── ✅ Instalar módulos
-├── ✅ Analisar evidências
-├── ✅ Gerar relatórios
-├── ✅ Configurar o sistema
-├── ❌ Deletar/modificar evidências
-├── ❌ Alterar audit logs / chain of custody
-└── ❌ Escalar para root
-```
-
-### Sistema de Auditoria Imutável
-
-Cada ação é registrada com:
-
-- **Timestamp** (RFC 3339, UTC)
-- **Usuário** que executou a ação
-- **Tipo de evento** e detalhes
-- **Hash anterior** (cadeia blockchain-like)
-- **Hash atual** (SHA-256)
-- **Assinaturas duplas** (Ed25519 + GPG)
-
-Resultado: **audit trail verificável e à prova de adulteração**.
-
-### Arquitetura Modular
-
-Instale apenas as ferramentas que você precisa:
-
-```bash
-# Listar módulos disponíveis
-forensics-modules list
-
-# Instalar módulo completo
-forensics-modules install memory-forensics
-
-# Instalar sub-módulos específicos
-forensics-modules install cloud-forensics --only aws-tools,gcp-tools
-
-# Seleção interativa
-forensics-modules install malware-analysis --interactive
-```
-
----
-
-## 🧩 Módulos Disponíveis
-
-O container usa arquitetura modular — instale só o que precisa!
-
-| Módulo | Categoria | Ferramentas | Tamanho | Descrição |
-|--------|-----------|-------------|---------|-----------|
-| **cloud-forensics** | Cloud | 15 | 900 MB | AWS, Azure, GCP — investigação de ambientes cloud |
-| **memory-forensics** | Memória | 8 | 755 MB | Volatility 2/3, Rekall, LiME, AVML |
-| **disk-forensics** | Disco | 12 | 1.0 GB | Sleuthkit, Autopsy, TestDisk, Foremost, Scalpel |
-| **network-forensics** | Rede | 10 | 740 MB | Wireshark, Zeek, tcpdump, ngrep |
-| **mobile-forensics** | Mobile | 8 | 580 MB | ADB, libimobiledevice, JADX, Frida |
-| **malware-analysis** | Malware | 15 | 2.0 GB | YARA, radare2, Ghidra, Cuckoo Sandbox |
-| **windows-forensics** | Windows | 10 | 590 MB | RegRipper, Plaso, evtx-parser, prefetch-parser |
-| **linux-forensics** | Linux | 8 | 315 MB | auditd, log-parsers, ext4-tools |
-| **container-forensics** | Container | 6 | 430 MB | Docker/Kubernetes investigation, dive, kubeshark |
-| **database-forensics** | Banco de Dados | 9 | 650 MB | MySQL, PostgreSQL, MongoDB forensics |
-| **email-forensics** | Email | 7 | 260 MB | PST/EML parsing, header analysis |
-| **osint-tools** 🆕 | OSINT | 25 | 450 MB | Sherlock, Holehe, theHarvester, Amass |
-| **threat-intelligence** 🆕 | Inteligência | 15 | 320 MB | MISP, IOC feeds, threat hunting |
-| **web-recon** 🆕 | Recon | 18 | 280 MB | Subdomain enum, web scraping, DNS |
-
-**Total:** 14 módulos • 161+ ferramentas • ~9.3 GB (todos os módulos instalados)
-
-> ✅ **Todas as ferramentas são funcionais** — instalação real, não simulada!
-
----
-
-## 📦 Quick Start
-
-### Pré-requisitos
-
-- Docker 20.10+
-- Docker Compose V2 (plugin integrado ao Docker)
-- 8 GB RAM mínimo (16 GB recomendado)
-- 50 GB de espaço livre em disco
-
-### Instalação
-
-#### Passo 1: Clonar o repositório
+## Quickstart
 
 ```bash
 git clone https://github.com/joao-henrike/Containers.git
 cd Containers/forensics-professional
-```
 
-#### Passo 2: Garantir permissões corretas
-
-```bash
-chmod 750 evidence cases keys logs reports modules config
-```
-
-#### Passo 3: Build do container
-
-```bash
-# O build leva ~10-15 minutos na primeira vez
+# Build & start
 docker compose build
-```
-
-#### Passo 4: Iniciar o container
-
-```bash
 docker compose up -d
 
-# Verificar se está rodando
-docker ps
-```
+# Drop into the analyst shell
+docker compose exec forensics bash
 
-#### Passo 5: Acessar o shell forense
-
-```bash
-docker exec -it forensics-workstation bash
-# O banner profissional será exibido!
-```
-
-#### One-liner (instalação rápida)
-
-```bash
-git clone https://github.com/joao-henrike/Containers.git && \
-cd Containers/forensics-professional && \
-docker compose build && \
-docker compose up -d && \
-docker exec -it forensics-workstation bash
-```
-
-### Primeiros Passos (dentro do container)
-
-```bash
-# 1. Verificar saúde do sistema
-forensics-health check
-
-# 2. Verificar integridade do audit log
-forensics-audit verify
-
-# 3. Listar módulos disponíveis
+# Inside the container
 forensics-modules list
-
-# 4. Instalar as ferramentas necessárias
-forensics-modules install disk-forensics
-
-# 5. Começar a trabalhar
-cd /cases
+forensics-modules install memory-forensics
+forensics-audit verify
 ```
 
-### Investigação OSINT 🆕
+For a guided tour with sample evidence, see
+[`docs/examples/first-case.md`](docs/examples/first-case.md).
+
+## Module catalogue
+
+| Module                | Category   | Submodules                                            | Size (MB) |
+| :-------------------- | :--------- | :---------------------------------------------------- | --------: |
+| cloud-forensics       | cloud      | aws-tools, azure-tools, gcp-tools, generic-cloud      |       900 |
+| memory-forensics      | memory     | volatility, lime, avml                                |       480 |
+| disk-forensics        | disk       | sleuthkit, testdisk, foremost, scalpel                |       220 |
+| network-forensics     | network    | wireshark, zeek, tcpdump, ngrep                       |       740 |
+| mobile-forensics      | mobile     | android-tools, ios-tools, backup-extractors           |       580 |
+| malware-analysis      | malware    | yara, radare2, ghidra, clamav                         |     2 048 |
+| windows-forensics     | windows    | regripper, plaso, evtx-parser, prefetch-parser        |       590 |
+| linux-forensics       | linux      | auditd-tools, log-parsers, ext4-tools                 |       315 |
+| container-forensics   | container  | docker-forensics, kubernetes-tools                    |       430 |
+| database-forensics    | database   | mysql-tools, postgresql-tools, mongodb-tools          |       650 |
+| email-forensics       | email      | pst-parser, eml-parser, header-analyzer               |       260 |
+| osint-tools           | osint      | social-media, email-osint, domain-recon, phone-osint  |       450 |
+| threat-intelligence ⚠ | threat     | ioc-feeds, threat-hunting, misp-integration, opencti  |       320 |
+| web-recon             | recon      | subdomain-enum, web-scraping, dns-recon               |       280 |
+
+⚠ = `experimental` — APIs/tooling change frequently upstream.
+
+`forensics-modules info <name>` shows submodule details, dependencies, and
+known issues.
+
+## Common operations
 
 ```bash
-# Instalar módulo OSINT
-forensics-modules install osint-tools
+# Inspect a module
+forensics-modules info malware-analysis
 
-# Busca de perfis em redes sociais
-sherlock <target_username>
+# Install with a subset of submodules
+forensics-modules install osint-tools --only social-media,email-osint
 
-# Verificação de email
-holehe suspect@email.com
+# Show plan without doing the work
+forensics-modules install memory-forensics --dry-run
 
-# Reconhecimento de domínio
-theHarvester -d target-company.com -b all
-amass enum -d target-company.com
+# Re-run only the broken submodules of a partially-installed module
+forensics-modules repair malware-analysis
 
-# OSINT de número de telefone
-phoneinfoga scan -n +5511999999999
+# Tear down a module (apt remove + pip uninstall where defined)
+forensics-modules remove ngrep
+
+# Audit log
+forensics-audit verify
+forensics-audit show --limit 50
+forensics-audit show --event-type module_installed --user sherlock
+forensics-audit export --output evidence/audit-2026-05-03.jsonl --format jsonl
+
+# Health
+forensics-health
+forensics-health quick-check         # used by Docker HEALTHCHECK
 ```
 
----
+## Privileged operations (post-quantum auth)
 
-## 🔧 Uso
-
-### Gerenciamento de Módulos
+Some operations need genuine root inside the container (kernel module
+load, raw device access). To gate this behind a strong authenticator:
 
 ```bash
-forensics-modules list                                          # Lista módulos
-forensics-modules info memory-forensics                        # Detalhes de um módulo
-forensics-modules install memory-forensics                     # Instala completo
-forensics-modules install cloud-forensics --only aws-tools     # Sub-módulo específico
-forensics-modules install malware-analysis --interactive       # Seleção interativa
-forensics-modules status                                        # O que está instalado
-forensics-modules remove network-forensics                     # Remove módulo
+# One-time setup: generate the ML-DSA-65 keypair (asks for a passphrase)
+sudo /opt/forensics/bin/generate-quantum-keys.sh
+
+# Authenticate and obtain a root shell
+quantum-root
 ```
 
-### Sistema de Auditoria
+`quantum-root` runs a real challenge-response with ML-DSA-65 (NIST FIPS 204).
+**There is no fallback success path** — if the keys are missing or the
+passphrase is wrong, authentication fails. See
+[`docs/PRIVILEGED_MODE.md`](docs/PRIVILEGED_MODE.md).
 
-```bash
-forensics-audit verify                                   # Verifica integridade total
-forensics-audit show                                     # Últimas entradas
-forensics-audit show --limit 50                          # Últimas 50 entradas
-forensics-audit show --event-type module_install         # Filtrar por tipo
-forensics-audit show --user sherlock                     # Filtrar por usuário
-forensics-audit export --output backup.json --format json # Exportar
-forensics-audit stats                                    # Estatísticas
-```
+If you don't need PQC authentication, ordinary `sudo apt-get install <pkg>`
+also works for whitelisted commands; you don't need `quantum-root` to
+install modules.
 
-### Health & Debugging (Flight Recorder)
+## Configuration
 
-```bash
-forensics-health check                          # Health check completo
-forensics-health quick-check                    # Check rápido
-forensics-health why-slow "log2timeline.py"     # Diagnóstico de performance
-forensics-health snapshot                       # Captura estado do sistema
-```
+Defaults live in [`config/config.yaml`](config/config.yaml). Override
+per-deployment by mounting a different YAML at `/etc/forensics/config.yaml`,
+or by setting environment variables:
 
-### Compliance NIST
+| Variable                                  | Effect                                  |
+| :---------------------------------------- | :-------------------------------------- |
+| `FORENSICS_AUDIT_STRICT=true`             | Audit-write failures abort the action.  |
+| `FORENSICS_MODULES_PARALLEL_JOBS=4`       | Install N submodules in parallel.       |
+| `FORENSICS_MODULES_STREAM_OUTPUT=false`   | Buffer install output (CI-friendly).    |
+| `FORENSICS_QUANTUM_ALLOW_DEMO_FALLBACK=true` | (Demos only — do not set in prod.)   |
 
-```bash
-forensics-compliance validate         # Valida aderência NIST SP 800-86
-forensics-report generate --nist-compliant  # Relatório assinado digitalmente
-```
-
----
-
-## 🏗️ Arquitetura
+## Repository layout
 
 ```
 forensics-professional/
-├── Dockerfile                        # Multi-stage build otimizado (v2.1.0-FINAL)
-├── docker-compose.yml                # Orquestração com recursos dinâmicos
-├── docker-entrypoint.sh              # Init seguro: root → sherlock
-│
-├── core/                             # Sistemas core
-│   ├── audit-system/                 # Auditoria imutável
-│   │   ├── audit-logger.py           # Logger criptográfico Ed25519+GPG
-│   │   ├── forensics-audit           # CLI de auditoria
-│   │   ├── init-audit.py             # Inicialização (genesis entry)
-│   │   ├── init-keys.sh              # Setup de chaves
-│   │   ├── quantum-root              # Autenticação PQC para root
-│   │   ├── quantum_verify.c          # Validador PQC em C
-│   │   ├── crypto_signer.py          # Assinador digital de relatórios
-│   │   ├── root-monitor.py           # Monitor de tentativas de escalonamento
-│   │   └── bash-hooks.sh             # Hooks de shell para auditoria automática
-│   │
-│   ├── module-manager/               # Gerenciador de módulos
-│   │   └── forensics-modules         # CLI principal (Python)
-│   │
-│   ├── compliance/                   # NIST SP 800-86
-│   ├── integrations/                 # SIEM, TheHive, MISP, Cloud
-│   └── init-environment.sh           # Setup do ambiente forense
-│
-├── scripts/                          # Utilitários
-│   ├── forensics-health              # Health check + Flight Recorder
-│   ├── install-modules.sh            # Instalador auxiliar de módulos
-│   └── validation-scripts/           # Scripts de validação forense
-│       ├── FBI_VALIDATION_CLEAN.sh
-│       └── ULTIMATE_VALIDATION_FIXED.sh
-│
-├── docs/                             # Documentação
-│   ├── banner.txt                    # Banner do container
-│   ├── OSINT_INTELLIGENCE_TOOLS.md
-│   ├── CRIPTOGRAFIA_QUANTICA_EXPLICACAO.md
-│   └── CADEIA_CUSTODIA_EXPLICACAO.md
-│
-├── modules/                          # Definições de módulos
-│   └── registry.json                 # Registry central (JSON organizado)
-│
-├── config/                           # Configurações (.gitkeep)
-├── evidence/                         # Evidências (read-only, .gitkeep)
-├── cases/                            # Casos de trabalho (.gitkeep)
-├── keys/                             # Chaves PQC (.gitkeep)
-├── logs/                             # Audit logs (.gitkeep)
-└── reports/                          # Relatórios (.gitkeep)
+├── Dockerfile                      # multi-stage, gosu-verified, USER sherlock
+├── docker-compose.yml              # cap_drop ALL + cap_add specifics
+├── docker-entrypoint.sh            # tini-wrapped, gosu-based privilege drop
+├── VERSION                         # single source of truth
+├── requirements.txt                # pinned Python deps
+├── config/
+│   ├── config.yaml                 # default deployment config
+│   └── sudoers.d-sherlock          # restricted sudo policy
+├── core/
+│   ├── audit-system/               # forensics-audit, quantum-root, hooks
+│   ├── module-manager/             # forensics-modules
+│   └── forensics/                  # Python package (audit, chain, modules,
+│                                   #   quantum, health)
+├── modules/
+│   ├── registry.json               # module catalogue
+│   └── installed/                  # per-install manifests (digest + status)
+├── scripts/
+│   ├── forensics-health
+│   ├── generate-quantum-keys.sh
+│   └── validate.sh                 # smoke test (used in CI)
+├── docs/                           # SECURITY, INSTALL, ARCHITECTURE, …
+└── tests/                          # pytest suite
 ```
 
----
-
-## 🛡️ Modelo de Segurança
-
-### Proteção de Evidências
-
-```
-# /evidence montado como READ-ONLY
-# O usuário sherlock NÃO pode:
-#   - Deletar evidências
-#   - Modificar evidências
-#   - Alterar permissões
-
-# Tentativas são automaticamente bloqueadas e registradas:
-[2026-03-25T12:00:00Z] VIOLATION_ATTEMPT
-  - Action: DELETE evidence
-  - User: sherlock
-  - File: disk.img
-  - Result: BLOCKED
-  - Signature: Ed25519+GPG
-```
-
-### Proteção dos Logs
-
-```
-# Logs têm atributo append-only (chattr +a)
-# Mesmo root não pode modificar entradas passadas
-# Cada entrada está:
-#   1. Encadeada à entrada anterior (blockchain-like)
-#   2. Assinada com Ed25519
-#   3. Assinada com GPG
-#   4. Timestampada (UTC, RFC 3339)
-```
-
-### Acesso Root
-
-```
-# Senha do root desabilitada (passwd -l root)
-# Acesso root SOMENTE via chave pós-quântica (ML-DSA-65)
-# Somente o proprietário do container possui a chave privada
-```
-
----
-
-## 📊 Compliance NIST SP 800-86
-
-Container alinhado com as diretrizes do **NIST SP 800-86**:
-
-- ✅ **Seção 3.1.3** — Coleta de evidências (chain of custody automatizada)
-- ✅ **Seção 3.1.4** — Exame de evidências (ferramentas modulares)
-- ✅ **Seção 3.1.5** — Análise de evidências (workflow documentado)
-- ✅ **Seção 4** — Validação de ferramentas forenses (verificação de módulos)
-- ✅ **Apêndice D** — Chain of Custody (audit trail imutável)
+## Building & testing
 
 ```bash
-# Validar compliance
-forensics-compliance validate
+# Build
+docker compose build
+
+# Smoke test (inside the container)
+docker compose run --rm forensics /opt/forensics/bin/validate.sh
+
+# Lint & unit tests (host side)
+pip install -r requirements-dev.txt
+ruff check core/
+mypy core/
+pytest -v
 ```
 
----
+## Demonstration scenarios
 
-## ⚡ Performance
+Six end-to-end attack/defend scenarios live under
+[`docs/scenarios/`](docs/scenarios/README.md). Each scenario includes
+a self-contained docker-compose lab, exact red-team commands to
+compromise the target, and a complete blue-team workflow inside the
+forensics-professional container. They are designed for classroom
+demos and CTF-style exercises:
 
-O container é otimizado para máxima performance:
+1. [Apache web compromise](docs/scenarios/01-apache-web-attack.md) — SQLi → webshell → defacement
+2. [DNS tunneling exfiltration](docs/scenarios/02-dns-tunneling.md) — iodine + Zeek/tshark analysis
+3. [Container ransomware](docs/scenarios/03-ransomware-container.md) — YARA + radare2 + recovery
+4. [Linux privilege escalation](docs/scenarios/04-privilege-escalation.md) — PATH hijack + auditd attribution
+5. [C2 beacon detection](docs/scenarios/05-c2-beaconing.md) — statistical traffic analysis
+6. [Credential leak → DB intrusion](docs/scenarios/06-credential-leak.md) — git history + MySQL query-log replay
 
-- **Paralelismo agressivo** — usa todos os cores disponíveis do host automaticamente
-- **Multi-threading** nas instalações de módulos
-- **Async I/O** para operações de leitura de evidências grandes
-- **Memory-mapped files** para análise de datasets pesados
-- **Sem limites estáticos de CPU/RAM** — escala com o hardware disponível
+> ⚠️ The scenarios use intentionally vulnerable images and synthetic
+> malware for **educational purposes only**. Run them only on isolated
+> lab infrastructure you own.
 
----
+## Compliance
 
-## 🤝 Contribuindo
+Aligned with **NIST SP 800-86: Guide to Integrating Forensic Techniques
+into Incident Response**. Specifically:
 
-Contribuições da comunidade forense são bem-vindas!
+- **Section 4.1 (Data Collection)** — read-only evidence mounts.
+- **Section 4.2 (Examination)** — modular tool installs, reproducible
+  versions.
+- **Section 4.3 (Analysis)** — auditable operations.
+- **Section 4.4 (Reporting)** — exportable, signed audit trail.
 
-- 🐛 Reporte bugs via [GitHub Issues](https://github.com/joao-henrike/Containers/issues)
-- 💡 Sugira funcionalidades via [Feature Requests](https://github.com/joao-henrike/Containers/issues/new)
-- 🔧 Envie Pull Requests
-- 📖 Melhore a documentação
-- 🧩 Adicione novos módulos forenses
+This alignment is operational, not certified. For a court-defensible
+deployment you also need: external append-only log storage, a chain-of-
+custody form, and a documented analyst training record.
 
-Leia o [CONTRIBUTING.md](CONTRIBUTING.md) para detalhes.
+## Contributing
 
----
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). Bug reports and module additions
+are very welcome — open an issue first to discuss anything non-trivial.
 
-## 📄 Licença
+## License
 
-Este projeto está licenciado sob a MIT License com disclaimers forenses — veja o arquivo [LICENSE](LICENSE) para detalhes.
+MIT. See [`LICENSE`](LICENSE).
 
-**Importante:** Esta ferramenta é destinada exclusivamente a investigações forenses legítimas. Os usuários são responsáveis pelo cumprimento das leis locais, integridade das evidências e seguimento dos procedimentos forenses corretos.
+## Maintainer
 
----
-
-## 📞 Suporte
-
-- **📖 Documentação:** [/docs](docs/)
-- **💬 Discussões:** [GitHub Discussions](https://github.com/joao-henrike/Containers/discussions)
-- **🐛 Bug Reports:** [GitHub Issues](https://github.com/joao-henrike/Containers/issues)
-- **🔐 Segurança:** Abra uma Issue privada para vulnerabilidades
-
----
-
-## 🙏 Agradecimentos
-
-- [Open Quantum Safe (liboqs)](https://openquantumsafe.org/) — criptografia pós-quântica
-- [The Sleuth Kit Project](https://www.sleuthkit.org/)
-- [Volatility Foundation](https://volatilityfoundation.org/)
-- Toda a comunidade de forense digital open source
-
----
-
-**Made with ❤️ for the digital forensics community**
-
-**Versão:** 2.1.0-FINAL | **Módulos:** 14 | **Ferramentas:** 161+
-**Compliance:** NIST SP 800-86 | **Criptografia:** Post-Quantum Ready | **Licença:** MIT
+[@joao-henrike](https://github.com/joao-henrike) — issues and PRs welcome.

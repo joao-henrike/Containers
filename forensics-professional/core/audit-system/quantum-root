@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# quantum-root — privilege escalation gated by ML-DSA-65 challenge-response
+# ==============================================================================
+# Behaviour:
+#   1. python3 -m forensics.quantum.auth runs the actual challenge.
+#   2. On success, exec sudo -i (sherlock will be prompted by sudo).
+#   3. On failure, exit 1. NO fallback success path.
+#
+# Audit logging is handled inside forensics.quantum.auth, not here.
+# ==============================================================================
+
+set -euo pipefail
+
+if [[ -t 1 ]]; then
+    C_RED=$'\033[0;31m'; C_GRN=$'\033[0;32m'; C_CYN=$'\033[0;36m'
+    C_BLD=$'\033[1m'; C_NC=$'\033[0m'
+else
+    C_RED=''; C_GRN=''; C_CYN=''; C_BLD=''; C_NC=''
+fi
+
+if [[ "${EUID}" -eq 0 ]]; then
+    printf '%sAlready root. No quantum-root needed.%s\n' "${C_CYN}" "${C_NC}"
+    exec bash
+fi
+
+cat <<EOF
+${C_CYN}${C_BLD}╔════════════════════════════════════════════════════════════════╗
+║   Post-quantum authentication — ML-DSA-65 (NIST FIPS 204)      ║
+╚════════════════════════════════════════════════════════════════╝${C_NC}
+EOF
+
+if python3 -m forensics.quantum.auth; then
+    printf '\n%s%s✓ Authenticated. Escalating to root.%s\n\n' \
+        "${C_GRN}" "${C_BLD}" "${C_NC}"
+    exec sudo -i
+else
+    rc=$?
+    printf '\n%s%s✗ Authentication failed.%s\n\n' \
+        "${C_RED}" "${C_BLD}" "${C_NC}"
+    exit "${rc}"
+fi

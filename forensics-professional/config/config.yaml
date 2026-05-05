@@ -1,0 +1,58 @@
+# ==============================================================================
+# Forensics Professional — default configuration
+# ==============================================================================
+# Override per-deployment by mounting a custom config at /etc/forensics/config.yaml
+# Environment variables take precedence over this file.
+# ==============================================================================
+
+version: 3
+
+audit:
+  # Path to the immutable audit log
+  log_path: /var/log/forensics/audit.log
+
+  # Strict mode: any audit failure aborts the action. False = degrade gracefully
+  # but surface errors via a separate error log.
+  strict: false
+
+  # Also write errors here when the primary audit write fails. Mounted volume.
+  error_log: /var/log/forensics/audit.errors.log
+
+  # GPG identity used for clearsign signatures (informational; auto-generated)
+  gpg_email: forensics-audit@professional.local
+
+  # Maximum size before rotation, in MiB. Set 0 to disable rotation.
+  rotate_size_mib: 256
+
+modules:
+  # Where module install manifests are tracked
+  installed_dir: /opt/forensics/modules/installed
+  registry: /opt/forensics/modules/registry.json
+  install_log_dir: /var/log/forensics/installations
+
+  # Parallel installs of independent submodules. Default 1 = sequential.
+  # Increase only if you understand the dependency graph.
+  parallel_jobs: 1
+
+  # Per-command timeout, in seconds.
+  command_timeout: 900
+
+  # Stream sub-process output to terminal in real time.
+  stream_output: true
+
+quantum:
+  # Path to the encrypted ML-DSA-65 private key. Generated via:
+  #   /opt/forensics/bin/generate-quantum-keys.sh
+  private_key: /opt/forensics/quantum-keys/dilithium_private.key.enc
+  public_key: /opt/forensics/quantum-keys/dilithium_public.key
+
+  # If false and the keypair is missing, quantum-root simply refuses (no
+  # 'fallback success' theatre). Set true ONLY for demos / first-boot setup.
+  allow_demo_fallback: false
+
+paths:
+  evidence: /evidence
+  cases: /cases
+  reports: /reports
+  keys: /opt/forensics/quantum-keys
+  tools: /opt/forensics/tools

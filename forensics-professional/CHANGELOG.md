@@ -1,87 +1,117 @@
 # Changelog
 
-Todas as mudanças significativas neste projeto são documentadas aqui.
+All notable changes to this project follow the
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format and
+adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-O formato segue [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-e este projeto segue [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [3.0.0] — 2026-05-03
 
----
+This release is a near-complete rewrite. Most behaviour stays the same
+from the analyst's point of view, but internals are reorganised and
+several promises that the previous version did not actually keep are now
+either kept properly or removed.
 
-## [2.1.0-FINAL] - 2026-03-25
+### Added
+- `core/forensics/` — proper Python package replacing the loose scripts
+  under `core/`.
+  - `forensics.audit` — thread-safe `AuditLogger` with atomic `O_APPEND`
+    writes and Ed25519/GPG signatures.
+  - `forensics.chain.logger` — chain-of-custody command capture
+    (the file `bash-hooks.sh` was importing but did not exist before).
+  - `forensics.modules.manager.ModuleManager` — install/remove/verify/
+    repair with **real** verification, idempotent installs, parallel
+    submodule support, dry-run, and per-install manifests with SHA-256
+    digests.
+  - `forensics.quantum.keygen` — actually generates the ML-DSA-65 keypair
+    that `quantum-root` needs (using AES-256-GCM + Argon2id).
+  - `forensics.quantum.auth` — real challenge-response authentication;
+    no fallback success path.
+  - `forensics.health.monitor` — structured probes, JSON output, exit
+    codes for CI.
+- `gosu` is now installed and GPG-verified during build.
+- `sudo` is now installed and restricted via
+  `config/sudoers.d-sherlock` (no shell escalation).
+- `USER sherlock` directive — container default user is now the analyst
+  account, not root.
+- `HEALTHCHECK` directive — Docker now reports unhealthy containers.
+- Streaming subprocess output during installs (no more 10-minute silent
+  installs).
+- Idempotent installs: re-running `install <module>` skips submodules
+  whose verifier hints already pass.
+- `repair <module>` command for re-installing only the broken submodules.
+- Manifest digests in `modules/installed/<name>.json` so install records
+  are tamper-evident at the filesystem layer too.
+- Per-submodule `verify` hints in `modules/registry.json`.
+- `.dockerignore` to keep evidence/keys/logs out of the build context.
+- `requirements.txt` and `requirements-dev.txt` with pinned versions.
+- `pyproject.toml` for proper packaging metadata.
+- `Makefile` for the common host-side targets.
+- Test suite under `tests/`.
+- `docs/examples/first-case.md` — happy-path tutorial.
+- `docs/PRIVILEGED_MODE.md` — explicit guide for the rare cases you need
+  `--privileged`.
 
-### 🔧 Correções Críticas (Dockerfile)
+### Changed (breaking)
+- **Container default user is now `sherlock`**, not root. `docker exec`
+  without `-u` lands in the analyst account.
+- **Audit log file format adds a `signatures` key.** Old logs without
+  this key are still readable, but `forensics-audit verify` will refuse
+  them with a clear error rather than silently treating them as valid.
+  Migration: re-import old logs as evidence files; do not append to them.
+- **`forensics-modules remove` now actually uninstalls.** Previously it
+  only deleted a marker file. Existing scripts that relied on the marker
+  going away should still work; ones that relied on the package staying
+  installed will break.
+- **`quantum-root` no longer falls through to "success" when the binary
+  is missing.** The previous behaviour made any password accept root
+  if `quantum_verify` was not compiled. To use `quantum-root`, run
+  `/opt/forensics/bin/generate-quantum-keys.sh` first.
+- **Hardcoded password `sherlock:forensics` removed.** The user has no
+  password (`passwd -d`); use `docker exec` to enter the container.
+- **Module registry schema bumped to v2.** Submodules are now objects
+  with `name`, `verify`, and optional `notes`. Auto-migration from v1 is
+  not provided — regenerate from `modules/registry.json`.
+- **`rekall` removed from `memory-forensics`.** It has been broken on
+  Python ≥ 3.10 for years and the upstream project is unmaintained.
+  Volatility 3 is the documented replacement.
+- All version strings now read from `VERSION` at the project root.
 
-- **FIX:** `openssl rand -base64 32` substituído por `echo "sherlock:forensics" | chpasswd`
-  - Causa: erro de subshell (exit code 1) ao criar a senha do usuário durante o build
-- **FIX:** Pacote `yq` removido da lista do `apt-get`
-  - Causa: não possui `installation candidate` no Ubuntu 22.04 padrão (exit code 100)
-- **FIX:** Pacote `hashlib` removido do `pip3 install`
-  - Causa: módulo nativo do Python, causava `legacy-install-failure` no pip
-- **FIX:** Pacote `requests` adicionado ao `pip3 install`
-  - Causa: sua ausência causava `ModuleNotFoundError: No module named 'requests'` ao invocar o `forensics-modules`
-- **FIX:** Diretório `/var/log/forensics/telemetry` criado explicitamente no Dockerfile
-  - Causa: `PermissionError` no Flight Recorder ao tentar gravar métricas de telemetria
-- **FIX:** `chown -R sherlock:sherlock /cases` adicionado ao build
-  - Causa: analista não conseguia escrever em `/cases` sem escalar privilégio
-- **FEAT:** `software-properties-common` adicionado às dependências APT
-  - Motivo: necessário para `add-apt-repository` nos módulos `windows-forensics` e `linux-forensics` (instalação do Plaso via PPA)
-- **FEAT:** `attr` adicionado às dependências APT (suporte ao `chattr +a` para logs)
+### Fixed
+- `gosu` is verified and installed (entrypoint relied on it but it was
+  missing).
+- `audit-logger.py` → `audit_logger.py` rename so Python can actually
+  import it. Was always being silently swallowed by `except: pass`.
+- `bash-hooks.sh` previously referenced
+  `/opt/forensics/chain-logger/logger.py`, which did not exist. The
+  hook now invokes `python3 -m forensics.chain.logger post`.
+- Command injection via `os.system(f'...')` in the audit logger.
+- Health check no longer crashes when `lsattr` is unavailable.
+- Module list and registry sizes now agree.
+- README placeholders (`YOUR-USERNAME`, `support@your-org.com`) replaced.
+- GPG private-key generation no longer uses `%no-protection`; a random
+  passphrase is stored in `keys/.gpg.passphrase` (mode 0400).
 
-### 🔧 Correções Críticas (docker-compose.yml)
+### Removed
+- `privileged: true` from default `docker-compose.yml`. Use
+  `docker-compose.override.yml` if you genuinely need it (see
+  `docs/PRIVILEGED_MODE.md`).
+- `core/init-environment.sh` (replaced by entrypoint logic).
+- `init-audit.py` and `init-keys.sh` (logic moved into Python helpers).
+- `scripts/install-modules.sh` (functionality merged into
+  `forensics-modules`).
+- `validation-scripts/FBI_VALIDATION_CLEAN.sh` and
+  `ULTIMATE_VALIDATION_FIXED.sh` (replaced by `scripts/validate.sh`).
 
-- **FIX:** Tag `version:` removida do topo do arquivo
-  - Causa: aviso `the attribute version is obsolete, it will be ignored` no Docker Compose V2
-- **FIX:** Bloco `deploy > resources` com `cpus: '8'` e `memory: 16G` removido
-  - Causa: erro fatal em hosts com menos de 8 núcleos ou 16 GB RAM disponíveis
-  - Solução: recursos agora são dinâmicos — o container usa tudo o que o host oferece
-- **FIX:** Volume de chaves corrigido de `./keys:/keys` para `./keys:/opt/forensics/quantum-keys`
-  - Causa: o script de autenticação PQC (ML-DSA-65) busca as chaves neste caminho exato
-- **FEAT:** `restart: unless-stopped` adicionado para resiliência do container
-- **FEAT:** Labels de metadados adicionadas (versão, compliance, crypto, usuário)
+### Security
+- Sudoers policy is now whitelist-only with explicit argument matching.
+- `chattr +a` only allowed on the canonical audit-log path.
+- Container runs without privileged mode by default.
+- `no-new-privileges:true` set on the container.
+- All Python dependencies pinned.
 
-### 🔧 Correções (README.md)
+## [2.1.0] — 2026-03-25 (legacy)
 
-- **FIX:** Todos os links `YOUR-USERNAME` substituídos por `joao-henrike`
-- **FIX:** Comandos `docker-compose` atualizados para `docker compose` (V2)
-- **FIX:** Tabela de módulos atualizada com tamanhos reais calculados
-- **FEAT:** Seção de OSINT adicionada (3 novos módulos: osint-tools, threat-intelligence, web-recon)
-- **FEAT:** Seção de performance documentada (sem limites estáticos)
-- **FEAT:** Arquitetura expandida com novos arquivos criados durante validação
+Previous release. The first public version. See git history for changes.
 
-### ➕ Novos Arquivos
-
-- `scripts/validation-scripts/FBI_VALIDATION_CLEAN.sh`
-- `scripts/validation-scripts/ULTIMATE_VALIDATION_FIXED.sh`
-- `scripts/install-modules.sh`
-- `docs/CRIPTOGRAFIA_QUANTICA_EXPLICACAO.md`
-- `docs/CADEIA_CUSTODIA_EXPLICACAO.md`
-- `core/audit-system/quantum_verify.c`
-- `core/audit-system/root-monitor.py`
-- `core/audit-system/crypto_signer.py`
-- `core/audit-system/bash-hooks.sh`
-- `core/audit-system/quantum-root`
-
----
-
-## [2.0.0] - 2026-02-07
-
-### 🎉 Lançamento Inicial
-
-- Container Docker profissional para forense digital (Linux)
-- Criptografia pós-quântica para root (Kyber/Dilithium via liboqs)
-- Sistema de auditoria imutável (Ed25519 + GPG, cadeia blockchain-like)
-- Chain of custody automatizada
-- Arquitetura modular: 11 módulos forenses iniciais
-- Gerenciador `forensics-modules` com sub-módulos
-- Registry central em JSON (`modules/registry.json`)
-- Sistema de resolução de conflitos de dependências
-- Retry automático com backoff em falhas de rede
-- Paralelismo agressivo (todos os cores do host)
-- Flight Recorder: telemetria, time-travel debugging, health monitoring
-- Compliance NIST SP 800-86
-- Assinatura digital de relatórios (Ed25519 + GPG)
-- Timestamps certificados (UTC, RFC 3339)
-- Usuário `sherlock` com permissões controladas (não pode deletar evidências)
-- Evidências protegidas (read-only por design)
-- GitHub Actions (CI/CD automático)
-- Documentação completa: README, QUICKSTART, INSTALL, ARCHITECTURE, CONTRIBUTING, SECURITY, LICENSE, CODE_OF_CONDUCT
+[3.0.0]: https://github.com/joao-henrike/Containers/compare/v2.1.0...v3.0.0
+[2.1.0]: https://github.com/joao-henrike/Containers/releases/tag/v2.1.0

@@ -1,0 +1,43 @@
+# ==============================================================================
+# Professional Forensics Container — Python runtime dependencies
+# ==============================================================================
+# Pinned to known-good versions. Update via:
+#   pip install --upgrade -r requirements.txt
+#   pip freeze | grep -E '^(cryptography|...)' >> requirements.txt
+# ==============================================================================
+
+# --- Cryptography (audit signatures, key handling) ---------------------------
+cryptography==43.0.1
+pycryptodome==3.20.0
+PyNaCl==1.5.0
+
+# --- Post-Quantum (optional; loaded only if liboqs.so is installed) ---------
+# Comentado por padrão: requer liboqs presente. O Dockerfile compila e instala
+# antes do pip, então será resolvido em build-time.
+liboqs-python==0.10.0
+
+# --- Forensic helpers --------------------------------------------------------
+pefile==2024.8.26
+python-magic==0.4.27
+yara-python==4.5.1
+python-dateutil==2.9.0.post0
+psutil==6.0.0
+
+# --- I/O & utilities ---------------------------------------------------------
+aiofiles==24.1.0
+requests==2.32.3
+urllib3==2.2.3
+tabulate==0.9.0
+rich==13.8.1
+PyYAML==6.0.2
+
+# --- Mobile & malware analysis -----------------------------------------------
+androguard==4.1.2
+
+# --- Threat intel ------------------------------------------------------------
+pymisp==2.4.198
+OTXv2==1.5.12
+sigma-cli==1.0.4
+
+# --- Test/dev (installed only with `pip install -r requirements-dev.txt`) ----
+# pytest, pytest-cov, mypy, ruff — see requirements-dev.txt

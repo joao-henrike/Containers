@@ -1,93 +1,71 @@
-#!/bin/bash
+# shellcheck shell=bash
 # ==============================================================================
-# Professional Forensics Container — Bash Hooks v2.1.0
-# Captura automática de comandos para a cadeia de custódia
-# Ativado via .bashrc do usuário sherlock
+# Forensics Professional — bash command-capture hooks
 # ==============================================================================
+# Sourced from /home/sherlock/.bashrc to capture every command the analyst
+# runs into the cryptographic audit log. The hook offloads the actual write
+# to a backgrounded Python process so the prompt stays responsive.
 #
-# FUNCIONAMENTO:
-#   1. forensics_preexec() — chamado ANTES de cada comando (via trap DEBUG)
-#      - Captura o comando, cwd, tty, timestamp de início
-#   2. forensics_precmd()  — chamado DEPOIS de cada comando (via PROMPT_COMMAND)
-#      - Captura exit code, timestamp de fim
-#      - Envia dados para o chain-of-custody logger
-#
-# NOTA: Não captura se usuário for root (evita loop nos logs de auditoria)
+# Disabled automatically for root, for the chain-logger itself, and for
+# the noise list maintained in forensics.chain.logger.
 # ==============================================================================
 
-# Não ativar se já estiver ativo
-if [[ -n "$FORENSICS_HOOKS_LOADED" ]]; then
-    return 0
-fi
+# Idempotent
+[[ -n "${FORENSICS_HOOKS_LOADED:-}" ]] && return 0
 export FORENSICS_HOOKS_LOADED=1
 
-# Não ativar para root (evita loop ao modificar logs)
-if [[ "$EUID" -eq 0 ]] || [[ "$USER" == "root" ]]; then
+# Don't capture root sessions.
+if [[ "${EUID}" -eq 0 ]]; then
     return 0
 fi
 
-# Diretório dos logs de chain of custody
-CHAIN_COC_DIR="/var/log/forensics/chain-of-custody"
-LOGGER_SCRIPT="/opt/forensics/chain-logger/logger.py"
+# Don't capture if the chain-logger Python module is unavailable.
+if ! python3 -c 'import forensics.chain.logger' >/dev/null 2>&1; then
+    return 0
+fi
 
-# ==============================================================================
-# Hook ANTES de cada comando
-# ==============================================================================
-function forensics_preexec() {
-    # Ignorar comandos internos do próprio logger
-    case "$BASH_COMMAND" in
-        forensics_precmd*|forensics_preexec*|PROMPT_COMMAND*|"trap "*) return ;;
-        "") return ;;
+# ── Pre-exec — runs before each command ─────────────────────────────────────
+__forensics_preexec() {
+    case "${BASH_COMMAND}" in
+        __forensics_preexec*|__forensics_precmd*|PROMPT_COMMAND*) return ;;
+        '') return ;;
     esac
-
-    export FORENSICS_LAST_CMD="$BASH_COMMAND"
-    export FORENSICS_START_TIME="$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ 2>/dev/null)"
-    export FORENSICS_START_UNIX="$(date +%s%N 2>/dev/null)"
-    export FORENSICS_PWD_AT_CMD="$PWD"
-    export FORENSICS_TTY_AT_CMD="$(tty 2>/dev/null)"
+    local now tty_dev
+    now="$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ 2>/dev/null \
+           || date -u +%Y-%m-%dT%H:%M:%SZ)"
+    tty_dev="$(tty 2>/dev/null || echo unknown)"
+    export FORENSICS_LAST_CMD="${BASH_COMMAND}"
+    export FORENSICS_START_TIME="${now}"
+    export FORENSICS_PWD_AT_CMD="${PWD}"
+    export FORENSICS_TTY_AT_CMD="${tty_dev}"
     export FORENSICS_SESSION_ID="$$"
 }
 
-# ==============================================================================
-# Hook DEPOIS de cada comando
-# ==============================================================================
-function forensics_precmd() {
+# ── Post-exec — runs before each prompt is drawn ────────────────────────────
+__forensics_precmd() {
     local exit_code=$?
+    [[ -z "${FORENSICS_LAST_CMD:-}" ]] && return 0
 
-    # Não processar se não houve comando capturado
-    [[ -z "$FORENSICS_LAST_CMD" ]] && return 0
+    local end_time
+    end_time="$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ 2>/dev/null \
+                || date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-    # Capturar tempo de fim
-    local end_time end_unix
-    end_time="$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ 2>/dev/null)"
-    end_unix="$(date +%s%N 2>/dev/null)"
+    (
+        FORENSICS_CMD="${FORENSICS_LAST_CMD}" \
+        FORENSICS_EXIT_CODE="${exit_code}" \
+        FORENSICS_START_TIME="${FORENSICS_START_TIME}" \
+        FORENSICS_END_TIME="${end_time}" \
+        FORENSICS_PWD="${FORENSICS_PWD_AT_CMD}" \
+        FORENSICS_TTY="${FORENSICS_TTY_AT_CMD}" \
+        FORENSICS_SESSION="${FORENSICS_SESSION_ID}" \
+        python3 -m forensics.chain.logger post >/dev/null 2>&1
+    ) &
+    disown $! 2>/dev/null || true
 
-    # Passar para o logger Python (assíncrono para não bloquear o shell)
-    if [[ -x "$LOGGER_SCRIPT" ]]; then
-        (
-            FORENSICS_CMD="$FORENSICS_LAST_CMD"         \
-            FORENSICS_EXIT_CODE="$exit_code"             \
-            FORENSICS_START_TIME="$FORENSICS_START_TIME" \
-            FORENSICS_END_TIME="$end_time"               \
-            FORENSICS_START_UNIX="$FORENSICS_START_UNIX" \
-            FORENSICS_END_UNIX="$end_unix"               \
-            FORENSICS_PWD="$FORENSICS_PWD_AT_CMD"        \
-            FORENSICS_TTY="$FORENSICS_TTY_AT_CMD"        \
-            FORENSICS_SESSION="$FORENSICS_SESSION_ID"    \
-            python3 "$LOGGER_SCRIPT" post 2>/dev/null
-        ) &
-        disown $! 2>/dev/null
-    fi
-
-    # Limpar variáveis
-    unset FORENSICS_LAST_CMD FORENSICS_START_TIME FORENSICS_START_UNIX
-    unset FORENSICS_PWD_AT_CMD FORENSICS_TTY_AT_CMD
-
-    return $exit_code
+    unset FORENSICS_LAST_CMD FORENSICS_START_TIME \
+          FORENSICS_PWD_AT_CMD FORENSICS_TTY_AT_CMD
+    return "${exit_code}"
 }
 
-# ==============================================================================
-# Ativar hooks no shell atual
-# ==============================================================================
-trap 'forensics_preexec' DEBUG
-PROMPT_COMMAND="forensics_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+trap '__forensics_preexec' DEBUG
+PROMPT_COMMAND="__forensics_precmd${PROMPT_COMMAND:+;${PROMPT_COMMAND}}"
