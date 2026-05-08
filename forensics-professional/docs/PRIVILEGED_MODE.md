@@ -15,14 +15,20 @@ you need to **`losetup` an evidence image** for live mounting.
 | `CHOWN`            | Fix ownership on bind-mounted volumes.       |
 | `DAC_OVERRIDE`     | Read evidence regardless of file perms.      |
 | `FOWNER`           | chmod on owned files.                        |
-| `SETGID` / `SETUID`| `gosu` privilege drop.                       |
+| `SETGID` / `SETUID`| `gosu` privilege drop, `sudo` (apt/pip).     |
 | `NET_RAW`          | tcpdump, raw sockets.                        |
 | `NET_ADMIN`        | Interface configuration for capture.         |
 | `SYS_PTRACE`       | strace, ltrace for live analysis.            |
 | `LINUX_IMMUTABLE`  | `chattr +a` on the audit log.                |
 
-Plus `security_opt: [no-new-privileges:true]` to block any sneaky path
-to higher caps.
+> **Note on `no-new-privileges`.** Earlier revisions of this project set
+> `security_opt: [no-new-privileges:true]`, which **breaks** `sudo`
+> entirely (kernel `PR_SET_NO_NEW_PRIVS` blocks setuid binaries from
+> escalating). Because the module installer relies on
+> `sudo apt-get install` and `sudo pip3 install`, that setting silently
+> rendered every `forensics-modules install <name>` a no-op. The current
+> compose file does **not** set it; defence-in-depth here is the
+> sudoers allowlist (`config/sudoers/sherlock`) instead.
 
 ## When you actually need `privileged: true`
 
@@ -62,7 +68,6 @@ services:
 
 - Disables most of the container's isolation.
 - Bypasses `cap_drop: ALL`.
-- Makes `no-new-privileges: true` irrelevant for this container.
 - Allows escape via `cgroup` notify_on_release tricks (and many others).
 
 If you're handling adversarial evidence (malware samples, threat

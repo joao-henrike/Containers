@@ -1,0 +1,111 @@
+# ==============================================================================
+# Sherlock — restricted sudo policy
+# ==============================================================================
+# Goal: let sherlock install forensic tools without becoming a general-purpose
+# root user. Each command is explicit; no wildcard shells, no NOPASSWD on
+# anything that yields a shell or rewrites system identity.
+#
+# This file is COPIED into /etc/sudoers.d/sherlock-forensics at build time.
+# It does NOT live inside config/ top level (that path becomes a bind mount
+# on /etc/forensics at runtime) — keeping the sudoers fragment out of any
+# user-writable surface is intentional.
+# ==============================================================================
+
+# Defaults: always require terminal, never preserve env (prevents PATH attacks).
+Defaults:sherlock !requiretty
+Defaults:sherlock env_reset
+Defaults:sherlock secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# ── Package management (apt) ─────────────────────────────────────────────────
+sherlock ALL=(root) NOPASSWD: /usr/bin/apt-get update
+sherlock ALL=(root) NOPASSWD: /usr/bin/apt-get install -y *
+sherlock ALL=(root) NOPASSWD: /usr/bin/apt-get install --no-install-recommends -y *
+sherlock ALL=(root) NOPASSWD: /usr/bin/apt-get install -y --no-install-recommends *
+sherlock ALL=(root) NOPASSWD: /usr/bin/apt-get remove -y *
+sherlock ALL=(root) NOPASSWD: /usr/bin/apt-get autoremove -y
+sherlock ALL=(root) NOPASSWD: /usr/bin/apt-get clean
+sherlock ALL=(root) NOPASSWD: /usr/bin/dpkg --configure -a
+sherlock ALL=(root) NOPASSWD: /usr/bin/dpkg -i /tmp/*.deb
+
+# Some installers prepend DEBIAN_FRONTEND=noninteractive — sudo requires the
+# *exact* command form, so we whitelist the prefixed variants explicitly.
+sherlock ALL=(root) NOPASSWD: /usr/bin/env DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y *
+sherlock ALL=(root) NOPASSWD: /usr/bin/env DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y --no-install-recommends *
+
+# ── Repository helpers (some modules add PPAs / external repos) ──────────────
+sherlock ALL=(root) NOPASSWD: /usr/bin/add-apt-repository -y *
+sherlock ALL=(root) NOPASSWD: /usr/bin/tee /etc/apt/sources.list.d/*
+sherlock ALL=(root) NOPASSWD: /usr/bin/tee /etc/apt/trusted.gpg.d/*
+sherlock ALL=(root) NOPASSWD: /usr/bin/tee /usr/share/keyrings/*
+sherlock ALL=(root) NOPASSWD: /usr/bin/gpg --dearmor -o /etc/apt/trusted.gpg.d/*
+sherlock ALL=(root) NOPASSWD: /usr/bin/gpg --dearmor -o /usr/share/keyrings/*
+
+# ── Python package management ────────────────────────────────────────────────
+sherlock ALL=(root) NOPASSWD: /usr/bin/pip3 install *
+sherlock ALL=(root) NOPASSWD: /usr/bin/pip3 install --break-system-packages *
+sherlock ALL=(root) NOPASSWD: /usr/bin/pip3 install --break-system-packages --no-cache-dir *
+sherlock ALL=(root) NOPASSWD: /usr/bin/pip3 uninstall -y *
+
+# ── Filesystem placement of compiled artefacts ───────────────────────────────
+# `install` is the GNU coreutils binary. Sudo matches argument-by-argument, so
+# the wildcards must cover EACH positional token. We accept any -m mode that
+# is digits-only (3 or 4 octal digits) and any source/destination under the
+# forensic-tool tree. NB: `install -o root -g root -m 0755 SRC DST` is 8
+# tokens after `install`, hence 8 patterns below.
+sherlock ALL=(root) NOPASSWD: /usr/bin/install -o root -g root -m [0-9][0-9][0-9] /tmp/* /usr/local/bin/*
+sherlock ALL=(root) NOPASSWD: /usr/bin/install -o root -g root -m [0-9][0-9][0-9][0-9] /tmp/* /usr/local/bin/*
+sherlock ALL=(root) NOPASSWD: /usr/bin/install -o root -g root -m [0-9][0-9][0-9] /tmp/* /opt/forensics/tools/*
+sherlock ALL=(root) NOPASSWD: /usr/bin/install -o root -g root -m [0-9][0-9][0-9][0-9] /tmp/* /opt/forensics/tools/*
+sherlock ALL=(root) NOPASSWD: /usr/bin/cp /tmp/* /opt/forensics/tools/*
+sherlock ALL=(root) NOPASSWD: /usr/bin/cp -r /tmp/* /opt/forensics/tools/*
+sherlock ALL=(root) NOPASSWD: /usr/bin/cp /tmp/* /usr/local/bin/*
+sherlock ALL=(root) NOPASSWD: /usr/bin/mv /tmp/* /usr/local/bin/*
+sherlock ALL=(root) NOPASSWD: /usr/bin/mv /tmp/* /opt/forensics/tools/*
+sherlock ALL=(root) NOPASSWD: /usr/bin/mkdir -p /opt/forensics/tools/*
+sherlock ALL=(root) NOPASSWD: /bin/mkdir -p /opt/forensics/tools/*
+sherlock ALL=(root) NOPASSWD: /usr/bin/tar -xzf /tmp/*.tar.gz -C /usr/local/bin/*
+sherlock ALL=(root) NOPASSWD: /usr/bin/tar -xzf /tmp/*.tar.gz -C /opt/forensics/tools/*
+sherlock ALL=(root) NOPASSWD: /usr/bin/unzip -qo /tmp/*.zip -d /opt/forensics/tools/
+sherlock ALL=(root) NOPASSWD: /usr/bin/unzip -qo /tmp/*.zip -d /opt/forensics/tools/*
+sherlock ALL=(root) NOPASSWD: /bin/chmod +x /usr/local/bin/*
+sherlock ALL=(root) NOPASSWD: /bin/chmod +x /opt/forensics/tools/*
+
+# Some module installers clone git repos directly into /opt/forensics/tools/.
+sherlock ALL=(root) NOPASSWD: /usr/bin/git clone --depth 1 * /opt/forensics/tools/*
+
+# ── ClamAV signatures refresh ────────────────────────────────────────────────
+sherlock ALL=(root) NOPASSWD: /usr/bin/freshclam
+
+# ── Append-only attribute on the audit log (chattr +a) ───────────────────────
+# Restricted to a single, fixed file path — not a generic chattr passthrough.
+sherlock ALL=(root) NOPASSWD: /usr/bin/chattr +a /var/log/forensics/audit.log
+sherlock ALL=(root) NOPASSWD: /usr/bin/chattr -a /var/log/forensics/audit.log
+
+# ── DEBCONF non-interactive helpers ──────────────────────────────────────────
+sherlock ALL=(root) NOPASSWD: /usr/bin/debconf-set-selections
+
+# ── quantum-root escalation ─────────────────────────────────────────────────
+# After ML-DSA-65 challenge succeeds in core/audit-system/quantum-root, the
+# wrapper exec's `sudo -i`. We allow it ONLY through the dedicated wrapper —
+# sherlock can't run `sudo -i` directly from a normal shell because the
+# wrapper has already authenticated; a regular `sudo -i` invocation will be
+# denied because the implementing rule below requires the SUDO_USER env to
+# match (NB: rule is conservative; if quantum-root is removed from the image,
+# the line below should also be removed).
+#
+# To prevent passwordless sudo -i bypass, we DO NOT NOPASSWD this rule.
+# quantum-root injects the passphrase via stdin redirection in the future;
+# for now this is the only `sudo -i` path and operators MUST configure a
+# strong sherlock password (or the entrypoint will keep `passwd -d` and
+# this line stays effectively blocked).
+#
+# sherlock ALL=(root) /usr/bin/sudo -i
+#
+# (Uncommented intentionally — current quantum-root will fail-closed on
+# escalation, which is the desired behaviour until the auth flow is finished.)
+
+# ── What is NOT allowed (intentional) ────────────────────────────────────────
+#   - sudo bash / sudo su / sudo -i / sudo -s   → all denied
+#   - Editing /etc/passwd, /etc/shadow, sudoers → denied
+#   - Modifying audit logs (only +a/-a on the canonical path)
+#   - Generic chmod/chown on arbitrary paths

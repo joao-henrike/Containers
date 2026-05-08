@@ -4,25 +4,57 @@
 # ==============================================================================
 # Behaviour:
 #   1. python3 -m forensics.quantum.auth runs the actual challenge.
-#   2. On success, exec sudo -i (sherlock will be prompted by sudo).
-#   3. On failure, exit 1. NO fallback success path.
+#   2. On success, behave according to the operator-chosen escalation policy
+#      (env var QROOT_ESCALATION). Default is FAIL-CLOSED: the audit trail
+#      records authentication success, but no shell is granted.
+#   3. On failure, exit non-zero. NO fallback success path.
 #
 # Audit logging is handled inside forensics.quantum.auth, not here.
+#
+# Escalation policies (set via env or /etc/forensics/quantum-root.conf):
+#   none      (default)  Authentication is recorded; no shell change.
+#                        Use this when sherlock should never escalate at all
+#                        and quantum-root just witnesses identity.
+#   sudo-i               Exec `sudo -i`. Requires a corresponding entry in
+#                        the sudoers fragment (currently commented out by
+#                        default — operator opt-in only). Will fail loudly
+#                        if sudo is not allowed.
+#   capsh                Drop into a bash with a wider capability set than
+#                        sherlock's defaults. Requires the container to have
+#                        been started with --cap-add=SETPCAP and the operator
+#                        to ship /opt/forensics/bin/qroot-shell-helper.
+#
+# Why fail-closed by default?
+#   Earlier revisions silently exec'd `sudo -i`, which collided with the
+#   restrictive sudoers fragment (no rule for `sudo -i`) and surfaced as
+#   "permission denied" AFTER the user thought they had authenticated. That
+#   is worse than a clear refusal, because it muddles the audit trail with
+#   half-completed escalations.
 # ==============================================================================
 
 set -euo pipefail
 
+# Colour helpers
 if [[ -t 1 ]]; then
-    C_RED=$'\033[0;31m'; C_GRN=$'\033[0;32m'; C_CYN=$'\033[0;36m'
-    C_BLD=$'\033[1m'; C_NC=$'\033[0m'
+    C_RED=$'\033[0;31m'; C_GRN=$'\033[0;32m'; C_YLW=$'\033[1;33m'
+    C_CYN=$'\033[0;36m'; C_BLD=$'\033[1m'; C_NC=$'\033[0m'
 else
-    C_RED=''; C_GRN=''; C_CYN=''; C_BLD=''; C_NC=''
+    C_RED=''; C_GRN=''; C_YLW=''; C_CYN=''; C_BLD=''; C_NC=''
 fi
 
+# Already root? No-op.
 if [[ "${EUID}" -eq 0 ]]; then
-    printf '%sAlready root. No quantum-root needed.%s\n' "${C_CYN}" "${C_NC}"
+    printf '%sAlready root. quantum-root not needed.%s\n' "${C_CYN}" "${C_NC}"
     exec bash
 fi
+
+# Load operator policy. Order: env > config file > default.
+QROOT_CONF="/etc/forensics/quantum-root.conf"
+if [[ -r "${QROOT_CONF}" ]]; then
+    # shellcheck source=/dev/null
+    source "${QROOT_CONF}"
+fi
+ESCALATION="${QROOT_ESCALATION:-none}"
 
 cat <<EOF
 ${C_CYN}${C_BLD}╔════════════════════════════════════════════════════════════════╗
@@ -30,13 +62,46 @@ ${C_CYN}${C_BLD}╔════════════════════�
 ╚════════════════════════════════════════════════════════════════╝${C_NC}
 EOF
 
-if python3 -m forensics.quantum.auth; then
-    printf '\n%s%s✓ Authenticated. Escalating to root.%s\n\n' \
-        "${C_GRN}" "${C_BLD}" "${C_NC}"
-    exec sudo -i
-else
+# ── Phase 1 — Authentication ────────────────────────────────────────────────
+if ! python3 -m forensics.quantum.auth; then
     rc=$?
     printf '\n%s%s✗ Authentication failed.%s\n\n' \
         "${C_RED}" "${C_BLD}" "${C_NC}"
     exit "${rc}"
 fi
+
+printf '\n%s%s✓ Authenticated.%s\n' "${C_GRN}" "${C_BLD}" "${C_NC}"
+
+# ── Phase 2 — Escalation (per policy) ───────────────────────────────────────
+case "${ESCALATION}" in
+    none)
+        printf '%sescalation policy: none — authentication recorded, no shell granted.%s\n' \
+            "${C_YLW}" "${C_NC}"
+        printf '   (set QROOT_ESCALATION=sudo-i in /etc/forensics/quantum-root.conf to enable a root shell.)\n\n'
+        exit 0
+        ;;
+
+    sudo-i)
+        printf '%sescalating via sudo -i ...%s\n\n' "${C_CYN}" "${C_NC}"
+        # If sudo -i is not in the sudoers fragment this will fail with the
+        # standard sudo error message — that's fine and preferable to a
+        # spoofed success.
+        exec sudo -i
+        ;;
+
+    capsh)
+        helper="/opt/forensics/bin/qroot-shell-helper"
+        if [[ ! -x "${helper}" ]]; then
+            printf '%sescalation policy: capsh — but %s is missing.%s\n' \
+                "${C_RED}" "${helper}" "${C_NC}" >&2
+            exit 1
+        fi
+        exec "${helper}"
+        ;;
+
+    *)
+        printf '%sunknown QROOT_ESCALATION=%s — refusing.%s\n' \
+            "${C_RED}" "${ESCALATION}" "${C_NC}" >&2
+        exit 2
+        ;;
+esac

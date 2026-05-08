@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str((HERE.parent.parent).resolve()))
+sys.path.insert(0, str(HERE.parent.resolve()))
 
 from forensics import __version__  # noqa: E402
 from forensics.audit.logger import get_logger  # noqa: E402

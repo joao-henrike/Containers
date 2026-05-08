@@ -28,24 +28,34 @@ services:
     tty: true
 
     # ── Privilege model ──────────────────────────────────────────────────────
-    # No privileged: true. Specific capabilities only.
+    # We do NOT use `privileged: true`. Instead, we drop ALL capabilities and
+    # add back only what the forensics tooling actually needs.
     cap_drop:
       - ALL
     cap_add:
       - CHOWN              # entrypoint fixes mounted-volume ownership
       - DAC_OVERRIDE       # read evidence regardless of user perms
       - FOWNER             # chmod on owned files
-      - SETGID
+      - SETGID             # gosu drops privilege; sudoers escalates apt/pip
       - SETUID
       - NET_RAW            # tcpdump / packet capture
       - NET_ADMIN          # interface configuration
       - SYS_PTRACE         # strace / ltrace for live analysis
       - LINUX_IMMUTABLE    # chattr +a on the audit log
 
-    # Block any new privilege gains beyond the cap_add list above.
-    security_opt:
-      - no-new-privileges:true
-      # AppArmor is intentionally left to the default Docker profile.
+    # ── Why no `no-new-privileges: true` ────────────────────────────────────
+    # NB: `no-new-privileges` (PR_SET_NO_NEW_PRIVS) blocks setuid binaries from
+    # escalating, which DEFEATS sudo. Sherlock relies on a tightly-scoped sudoers
+    # fragment (config/sudoers/sherlock) to install forensic packages at runtime
+    # via `forensics-modules install <name>`. Setting no-new-privileges would
+    # break every module installer with "sudo: effective uid is not 0".
+    #
+    # Defence-in-depth here is the *sudoers allowlist*, not no-new-privileges:
+    #   - shell escalation (sudo bash / sudo su / sudo -i) → DENIED
+    #   - editing /etc/passwd, /etc/shadow, sudoers          → DENIED
+    #   - chattr / chmod on arbitrary paths                  → DENIED
+    #   - generic command execution                          → DENIED
+    # See config/sudoers/sherlock and SECURITY.md for the threat model.
 
     # ── Resources (override per host) ────────────────────────────────────────
     # Compose v2 honours these directly; no `deploy:` block needed.
@@ -91,10 +101,11 @@ services:
         source: ./reports
         target: /reports
 
-      # User configuration overrides
+      # User configuration overrides — only the public config; sudoers fragment
+      # is baked into the image at build time, NOT bind-mounted.
       - type: bind
-        source: ./config
-        target: /etc/forensics
+        source: ./config/config.yaml
+        target: /etc/forensics/config.yaml
         read_only: true
 
     # ── Healthcheck (defined in Dockerfile) is honoured automatically ───────

@@ -15,6 +15,15 @@
 # • USER sherlock is the default; root is disabled (passwd -l).
 # • HEALTHCHECK exposes liveness to docker/compose orchestration.
 # • All Python deps are pinned in requirements.txt.
+#
+# IMPORTANT — apt-get install
+# ---------------------------
+# Do NOT add bash-style `# comments` *inside* the multi-line `apt-get install`
+# continuation. /bin/sh treats the `#` as start-of-comment which truncates the
+# entire logical line, leaving apt-get with zero packages and turning the next
+# physical line into a stand-alone command (e.g. `tini` -> "tini: not found").
+# This was the original v3.0.0 build failure. Group packages with blank-line
+# breaks instead, or leave a comment ABOVE the RUN block.
 # ==============================================================================
 
 ARG UBUNTU_VERSION=22.04
@@ -32,11 +41,11 @@ ARG LIBOQS_REF=0.11.0
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         build-essential \
-        cmake \
-        ninja-build \
-        git \
         ca-certificates \
+        cmake \
+        git \
         libssl-dev \
+        ninja-build \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/build
@@ -78,75 +87,71 @@ LABEL org.opencontainers.image.title="forensics-professional" \
 # ──────────────────────────────────────────────────────────────────────────────
 # 1. Base packages
 # ──────────────────────────────────────────────────────────────────────────────
-# Notes
-#   - 'sudo' is required so sherlock can drive apt-get for module installs.
-#     Restricted via /etc/sudoers.d/ to specific commands only.
-#   - 'gosu' replaces the unreliable su fallback in the entrypoint.
-#   - 'attr' is required for chattr +a on the audit log.
-#   - 'tini' as PID 1 reaps zombies and forwards signals.
+# Package groups (kept here for review only — DO NOT inline as # comments):
+#
+#   init/privilege:  tini, sudo, ca-certificates
+#   shell utils:     bash-completion, less, nano, tmux, vim-tiny
+#   vcs+net:         curl, git, openssh-client, wget
+#   data tools:      jq, parallel
+#   sys monitor:     htop, iotop, nethogs, procps, rsync, sysstat, tree
+#   python:          python3, python3-pip, python3-venv, python-is-python3
+#   crypto:          gnupg, openssl
+#   bin analysis:    binutils, file, ltrace, strace
+#   compression:     bzip2, gzip, p7zip-full, unzip, xz-utils
+#   network basic:   dnsutils, iproute2, iputils-ping, net-tools
+#   apt helpers:     gpg-agent, software-properties-common
+#   filesystem:      attr
+#   java:            default-jre-headless
+#   sqlite (mobile): sqlite3
+#   misc:            cron
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        # init / privilege drop
-        tini \
-        sudo \
-        ca-certificates \
-        # Shell utilities
+        attr \
         bash-completion \
-        vim-tiny \
-        nano \
-        tmux \
-        less \
-        # VCS & networking
-        git \
+        binutils \
+        bzip2 \
+        ca-certificates \
+        cron \
         curl \
-        wget \
-        openssh-client \
-        # Data processing
-        jq \
-        parallel \
-        # System monitoring
+        default-jre-headless \
+        dnsutils \
+        file \
+        git \
+        gnupg \
+        gpg-agent \
+        gzip \
         htop \
-        tree \
-        rsync \
-        sysstat \
+        iproute2 \
         iotop \
+        iputils-ping \
+        jq \
+        less \
+        ltrace \
+        nano \
+        net-tools \
         nethogs \
+        openssh-client \
+        openssl \
+        p7zip-full \
+        parallel \
         procps \
-        # Python
+        python-is-python3 \
         python3 \
         python3-pip \
         python3-venv \
-        python-is-python3 \
-        # Cryptography
-        openssl \
-        gnupg \
-        # Binary analysis baseline
-        file \
-        binutils \
-        strace \
-        ltrace \
-        # Compression
-        unzip \
-        p7zip-full \
-        gzip \
-        bzip2 \
-        xz-utils \
-        # Network basics
-        net-tools \
-        iproute2 \
-        iputils-ping \
-        dnsutils \
-        # APT helpers (some modules add PPAs)
+        rsync \
         software-properties-common \
-        gpg-agent \
-        # Filesystem attributes (chattr)
-        attr \
-        # Java (Android Backup Extractor)
-        default-jre-headless \
-        # SQLite (mobile module)
         sqlite3 \
-        # tmpwatch-style cleanup
-        cron \
+        strace \
+        sudo \
+        sysstat \
+        tini \
+        tmux \
+        tree \
+        unzip \
+        vim-tiny \
+        wget \
+        xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -201,7 +206,9 @@ RUN groupadd -r -g 1000 sherlock \
  && passwd   -l root
 
 # Sudoers rule — explicit commands only, no shell escalation.
-COPY config/sudoers.d-sherlock /etc/sudoers.d/sherlock-forensics
+# Note: sudoers fragment lives in config/sudoers/sherlock (NOT inside config/
+# top-level, to avoid collision with the runtime /etc/forensics bind mount).
+COPY config/sudoers/sherlock /etc/sudoers.d/sherlock-forensics
 RUN chmod 0440 /etc/sudoers.d/sherlock-forensics \
  && visudo -cf /etc/sudoers.d/sherlock-forensics
 
@@ -239,7 +246,7 @@ RUN mkdir -p \
 COPY --chown=sherlock:sherlock core/                /opt/forensics/core/
 COPY --chown=sherlock:sherlock scripts/             /opt/forensics/bin/
 COPY --chown=sherlock:sherlock modules/registry.json /opt/forensics/modules/registry.json
-COPY --chown=sherlock:sherlock config/              /etc/forensics/
+COPY --chown=sherlock:sherlock config/config.yaml   /etc/forensics/config.yaml
 COPY --chown=sherlock:sherlock docs/banner.txt      /etc/motd
 COPY --chown=sherlock:sherlock VERSION              /opt/forensics/VERSION
 COPY docker-entrypoint.sh                           /usr/local/bin/docker-entrypoint.sh
@@ -263,7 +270,7 @@ ENV FORENSICS_HOME="/opt/forensics" \
     FORENSICS_MODULES="/opt/forensics/modules" \
     FORENSICS_KEYS="/opt/forensics/quantum-keys" \
     FORENSICS_CONFIG="/etc/forensics" \
-    PYTHONPATH="/opt/forensics/core:/opt/forensics/core/audit-system:/opt/forensics/core/module-manager" \
+    PYTHONPATH="/opt/forensics/core" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/forensics/bin:/opt/forensics/core/module-manager:/opt/forensics/core/audit-system:/usr/local/bin:${PATH}" \

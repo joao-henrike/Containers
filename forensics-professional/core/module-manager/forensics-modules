@@ -14,8 +14,12 @@ from pathlib import Path
 
 # Make the in-tree package importable when this script is invoked directly
 # (eg by /usr/local/bin/forensics-modules → core/module-manager/forensics-modules).
+# The forensics package lives at core/forensics/, so we add core/ to sys.path.
+# Path layout: <repo>/core/module-manager/forensics-modules
+#   -> __file__.resolve().parent       = <repo>/core/module-manager
+#   -> __file__.resolve().parent.parent = <repo>/core   ← the right one
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str((HERE.parent.parent).resolve()))
+sys.path.insert(0, str(HERE.parent.resolve()))
 
 from forensics import __version__  # noqa: E402
 from forensics.colors import BOLD, CYAN, DIM, GREEN, NC, RED, YELLOW  # noqa: E402

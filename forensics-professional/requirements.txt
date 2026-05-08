@@ -11,6 +11,12 @@ cryptography==43.0.1
 pycryptodome==3.20.0
 PyNaCl==1.5.0
 
+# Argon2id KDF for the ML-DSA-65 private-key envelope. Without this the
+# fallback scrypt path is used silently — keys generated on one machine then
+# fail to decrypt on another whose argon2-cffi WAS available. Pinning here
+# guarantees consistent behaviour.
+argon2-cffi==23.1.0
+
 # --- Post-Quantum (optional; loaded only if liboqs.so is installed) ---------
 # Comentado por padrão: requer liboqs presente. O Dockerfile compila e instala
 # antes do pip, então será resolvido em build-time.
