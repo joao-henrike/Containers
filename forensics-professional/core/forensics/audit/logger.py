@@ -260,6 +260,7 @@ class AuditLogger:
                         "expected": expected_seq,
                         "got":      entry.get("seq"),
                     })
+                    result["status"] = "INVALID"
 
             ok = self._verify_ed25519(verifier, entry)
             if not ok:
