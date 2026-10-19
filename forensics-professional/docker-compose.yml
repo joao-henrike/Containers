@@ -51,11 +51,12 @@ services:
     # via `forensics-modules install <name>`. Setting no-new-privileges would
     # break every module installer with "sudo: effective uid is not 0".
     #
-    # The intended defence-in-depth is an argument-restricted sudoers policy.
-    # However, broad wildcard rules in config/sudoers/sherlock need remediation
-    # before this can be treated as a security boundary. Do not rely on these
-    # comments as proof that path traversal or every privilege path is denied.
-    # See SECURITY.md for the current limitations and pending hardening.
+    # The defence-in-depth is the root-owned argument-validating helper in
+    # config/forensics-privileged. It accepts only fixed package names and one
+    # fixed audit-log attribute operation; it does not edit APT sources, accept
+    # shell commands, or permit arbitrary file placement. Build/runtime
+    # validation is required before treating this boundary as verified.
+    # See SECURITY.md for the remaining limitations.
 
     # ── Resources (override per host) ────────────────────────────────────────
     # Compose v2 honours these directly; no `deploy:` block needed.
