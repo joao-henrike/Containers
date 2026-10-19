@@ -177,6 +177,14 @@ def test_chain_logger_noise_filter():
     assert not _is_noisy("cat /evidence/file.txt")
 
 
+def test_command_runner_enforces_timeout_without_output(tmp_path):
+    from forensics.modules.installers import CommandRunner
+
+    runner = CommandRunner(tmp_path / "installer.log", timeout=0.1)
+    with pytest.raises(RuntimeError, match="timeout"):
+        runner.run(["python3", "-c", "import time; time.sleep(3)"])
+
+
 def test_keygen_rejects_short_programmatic_passphrase(tmp_audit_env, tmp_path):
     from forensics.quantum.keygen import generate
 
