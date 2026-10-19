@@ -196,14 +196,27 @@ def cloud_aws(r: CommandRunner) -> None:
 
 
 def cloud_azure(r: CommandRunner) -> None:
-    # Use the explicitly permitted pip installer instead of piping a remote
-    # script into a sudo shell that the policy intentionally denies.
-    r.pip_install(
-        "azure-cli",
-        "azure-mgmt-compute",
-        "azure-mgmt-storage",
-        "azure-identity",
+    # Install the official Microsoft CLI repository without running a remote
+    # shell script as root. The gpg and tee invocations below match the current
+    # narrowly path-limited commands in config/sudoers/sherlock.
+    r.apt_install("apt-transport-https", "ca-certificates", "curl", "gnupg", "lsb-release")
+    r.shell(
+        "set -o pipefail && "
+        "if [ ! -s /usr/share/keyrings/microsoft-azure-cli.gpg ]; then "
+        "  curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | "
+        "  sudo gpg --dearmor -o /usr/share/keyrings/microsoft-azure-cli.gpg; "
+        "fi && "
+        "AZ_DIST=$(lsb_release -cs) && "
+        "ARCH=$(dpkg --print-architecture) && "
+        "printf 'Types: deb\\nURIs: https://packages.microsoft.com/repos/azure-cli/\\n"
+        "Suites: %s\\nComponents: main\\nArchitectures: %s\\n"
+        "Signed-By: /usr/share/keyrings/microsoft-azure-cli.gpg\\n' "
+        "\"$AZ_DIST\" \"$ARCH\" | "
+        "sudo tee /etc/apt/sources.list.d/azure-cli.sources >/dev/null"
     )
+    r.apt_update()
+    r.apt_install("azure-cli")
+    r.pip_install("azure-mgmt-compute", "azure-mgmt-storage", "azure-identity")
 
 
 def cloud_gcp(r: CommandRunner) -> None:
