@@ -111,17 +111,17 @@ jobs:
 
       - name: Run smoke tests
         run: |
-          docker compose exec -T forensics \
+          docker compose exec -T --user sherlock forensics \
             /opt/forensics/bin/validate.sh
 
       - name: Audit log integrity
         run: |
-          docker compose exec -T forensics \
+          docker compose exec -T --user sherlock forensics \
             forensics-audit verify
 
       - name: Module list
         run: |
-          docker compose exec -T forensics \
+          docker compose exec -T --user sherlock forensics \
             forensics-modules list
 
       - name: Stop container
