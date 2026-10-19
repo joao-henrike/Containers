@@ -42,7 +42,7 @@ docker compose build
 docker compose up -d
 
 # Drop into the analyst shell
-docker compose exec forensics bash
+docker compose exec --user sherlock forensics bash
 
 # Inside the container
 forensics-modules list
@@ -93,7 +93,7 @@ forensics-modules install memory-forensics --dry-run
 forensics-modules repair malware-analysis
 
 # Tear down a module (apt remove + pip uninstall where defined)
-forensics-modules remove ngrep
+forensics-modules remove network-forensics
 
 # Audit log
 forensics-audit verify
