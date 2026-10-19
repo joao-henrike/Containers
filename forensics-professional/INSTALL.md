@@ -23,22 +23,27 @@ git clone https://github.com/joao-henrike/Containers.git
 cd Containers/forensics-professional
 ```
 
-## 2. Build
+## 2. Prepare bind mounts and build
+
+The default image runs as the non-root `sherlock` user. Prepare host directories
+as your normal host user first; Compose will reject missing bind-mount paths.
+Do not run the quickstart as root, or the directories may not be writable by
+the container user.
 
 ```bash
+export HOST_UID="$(id -u)"
+mkdir -p evidence cases logs keys reports
 docker compose build
 ```
 
-Build time depends on network speed; expect 10–20 minutes on a fresh
-machine. The slowest step is compiling liboqs (the post-quantum library)
-in the builder stage.
+The image's `sherlock` UID is set to `HOST_UID`, so new case, log, key, and
+report files are normally owned by your host user. `HOST_GID` is not used by
+the image build. If these directories come from an older root-running image,
+check their ownership; only for legacy directories that are root-owned, fix
+them once on the host with `sudo chown -R "$(id -u):$(id -g)" cases logs keys reports`.
 
-To pin the host UID/GID to your local user (so files written into
-`./cases` aren't owned by 1000 if you happen to use a different ID):
-
-```bash
-HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose build
-```
+Build time depends on network speed; the slowest step is compiling liboqs
+(the post-quantum library) in the builder stage.
 
 ## 3. Start
 
@@ -61,24 +66,26 @@ The container performs first-boot setup automatically:
 docker compose exec forensics bash
 ```
 
-You'll land in the `sherlock` account. Verify everything is healthy:
+The Dockerfile's default runtime user is `sherlock`; `docker compose exec`
+therefore opens a non-root shell. Verify everything is healthy:
 
 ```bash
 forensics-health
 ```
 
-## 5. (Optional) Set up post-quantum authentication
+## 5. (Optional) Generate a post-quantum authentication keypair
 
-If you want `quantum-root` to actually gate privilege escalation:
+The ML-DSA-65 challenge module can record whether a key-authentication
+challenge succeeds, but `quantum-root` does **not** grant a root shell: its
+sudo handoff is not implemented and is intentionally fail-closed. Generate a
+keypair as `sherlock` without sudo:
 
 ```bash
-# Inside the container
-sudo /opt/forensics/bin/generate-quantum-keys.sh
+/opt/forensics/bin/generate-quantum-keys.sh
 ```
 
-You'll be prompted for a passphrase; it's used to AES-encrypt the
-ML-DSA-65 private key. Store the passphrase outside the container —
-**there is no recovery** if you lose it.
+You'll be prompted for a passphrase used to encrypt the ML-DSA-65 private key.
+Store it outside the container — **there is no recovery** if you lose it.
 
 ## 6. Install your first module
 
