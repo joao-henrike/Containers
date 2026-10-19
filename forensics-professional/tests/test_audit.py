@@ -106,6 +106,65 @@ def test_stats_output(tmp_audit_env):
     assert stats["event_counts"]["type_b"] == 1
 
 
+
+def test_missing_public_key_fails_closed(tmp_audit_env):
+    from forensics.audit.logger import AuditLogger
+
+    log = AuditLogger(strict=True)
+    log.log_event("signed_event", {})
+    (tmp_audit_env["keys_dir"] / "audit_ed25519.pub").unlink()
+
+    result = log.verify()
+    assert result["status"] == "ERROR"
+    assert "public key unavailable" in result["error"]
+
+
+def test_corrupt_final_line_is_not_ignored(tmp_audit_env):
+    from forensics.audit.logger import AuditLogger
+
+    log = AuditLogger(strict=True)
+    log.log_event("signed_event", {})
+    with Path(log.log_path).open("a", encoding="utf-8") as fh:
+        fh.write("not json\\n")
+
+    result = log.verify()
+    assert result["status"] == "ERROR"
+
+
+def test_missing_prefix_is_detected(tmp_audit_env):
+    from forensics.audit.logger import AuditLogger
+
+    log = AuditLogger(strict=True)
+    log.log_event("first", {})
+    log.log_event("second", {})
+    log_file = Path(log.log_path)
+    lines = log_file.read_text(encoding="utf-8").splitlines()
+    log_file.write_text(lines[1] + "\\n", encoding="utf-8")
+
+    result = log.verify()
+    assert result["status"] == "INVALID"
+    assert result["sequence_gaps"][0]["expected"] == 1
+
+
+def test_separate_logger_instances_serialize_concurrent_appends(tmp_audit_env):
+    from concurrent.futures import ThreadPoolExecutor
+    from forensics.audit.logger import AuditLogger
+
+    loggers = [AuditLogger(strict=True), AuditLogger(strict=True)]
+
+    def write_events(index: int) -> None:
+        for n in range(8):
+            loggers[index].log_event("concurrent_event", {"writer": index, "n": n})
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(write_events, [0, 1]))
+
+    result = AuditLogger(strict=True).verify()
+    assert result["status"] == "VALID"
+    assert result["total_entries"] == 16
+    assert result["sequence_gaps"] == []
+
+
 def test_empty_log_status(tmp_audit_env):
     from forensics.audit.logger import AuditLogger
     log = AuditLogger(strict=True)
