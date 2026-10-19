@@ -74,6 +74,13 @@ Ambientes especializados para:
 
 <img src="https://user-images.githubusercontent.com/73097560/115834477-dbab4500-a447-11eb-908a-139a6edaec5c.gif">
 
+## Current implementation status
+
+The current repository contains the `forensics-professional` container project.
+The cybersecurity/LLM categories above describe the broader project direction;
+they should not be interpreted as separate, implemented containers unless a
+corresponding project directory is present.
+
 ## <img src="https://raw.githubusercontent.com/Tarikul-Islam-Anik/Animated-Fluent-Emojis/master/Emojis/Objects/Open%20Book.png" width="35" /> Como usar
 ```bash
 # Clone o repositório
