@@ -6,15 +6,16 @@ The flow is:
     2. The user supplies the passphrase that decrypts the private key.
     3. The challenge is signed with the decrypted private key.
     4. The signature is verified against the public key.
-    5. On success, the caller is granted a privileged shell.
+    5. The result is recorded as an authentication attempt.
 
 There is **no** "fallback success" path. If liboqs-python isn't available
-or the keys are missing, authentication fails — explicitly.
+or the keys are missing, authentication fails — explicitly. A successful
+challenge does not itself grant a shell: ``quantum-root`` defaults to the
+fail-closed ``none`` policy, and its current sudo policy intentionally denies
+``sudo -i`` until a separate escalation handoff is implemented and validated.
 
-The module is designed to be invoked from a shell wrapper (``quantum-root``)
-that handles the actual privilege escalation via ``sudo``. This separation
-keeps the cryptography in Python (where it is testable) and the OS-level
-privilege drop in the shell (where it must be).
+This module owns the cryptographic challenge and audit record only. OS-level
+privilege changes are a separate, currently disabled capability.
 """
 
 from __future__ import annotations
