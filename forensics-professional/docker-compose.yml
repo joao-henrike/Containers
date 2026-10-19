@@ -46,10 +46,10 @@ services:
 
     # ── Why no `no-new-privileges: true` ────────────────────────────────────
     # NB: `no-new-privileges` (PR_SET_NO_NEW_PRIVS) blocks setuid binaries from
-    # escalating, which DEFEATS sudo. Sherlock relies on a tightly-scoped sudoers
-    # fragment (config/sudoers/sherlock) to install forensic packages at runtime
-    # via `forensics-modules install <name>`. Setting no-new-privileges would
-    # break every module installer with "sudo: effective uid is not 0".
+    # escalating, which DEFEATS sudo. The only sudo command is the root-owned,
+    # validating helper (config/forensics-privileged) for allowlisted APT
+    # packages and the fixed audit-log append-only flag. Python tools install
+    # into a sherlock-owned virtualenv and do not use sudo.
     #
     # The defence-in-depth is the root-owned argument-validating helper in
     # config/forensics-privileged. It accepts only fixed package names and one
