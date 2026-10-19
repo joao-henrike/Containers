@@ -103,7 +103,6 @@ def test_module_manager_unknown_module_raises(tmp_audit_env):
         mgr.install("does-not-exist", dry_run=True)
 
 
-
 def test_failed_remove_preserves_manifest(tmp_audit_env, monkeypatch):
     import forensics.modules.manager as manager_module
     from forensics.modules.manager import ModuleManager
