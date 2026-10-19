@@ -93,7 +93,7 @@ cd Containers/<nome-do-container>
 cat README.md
 ```
 
-> Cada pasta é um container independente com sua própria documentação, módulos e instruções de build.
+> Cada container implementado terá sua própria documentação, módulos e instruções de build. No estado atual, o container implementado é `forensics-professional`.
 
 <img src="https://user-images.githubusercontent.com/73097560/115834477-dbab4500-a447-11eb-908a-139a6edaec5c.gif">
 
