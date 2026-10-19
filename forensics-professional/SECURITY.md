@@ -44,11 +44,12 @@ Explicitly **not** permitted:
 
 ### `root` — locked
 
-The container's `root` account is **password-locked** (`passwd -l`). It is
-reachable only via:
-
-1. The Docker daemon (`docker exec -u root` from the host).
-2. `quantum-root` (after a successful ML-DSA-65 challenge).
+The container's `root` account is **password-locked** (`passwd -l`), but that
+alone does not prevent root processes from being started by Docker. Use
+`docker compose exec --user sherlock ...` for analyst commands. The current
+image has no final Dockerfile `USER` directive, so Compose `exec` without an
+explicit `--user` runs as root. The `quantum-root` escalation flow is currently
+fail-closed until its sudo handoff is implemented and validated.
 
 The intended policy is to require PQC authentication or daemon-level access
 for root. However, the currently committed sudoers wildcard rules mean this
