@@ -323,7 +323,8 @@ class ModuleManager:
                 ))
                 print(f"  {RED}✗{NC}  {sm_name}: {exc}")
 
-        # Clear the manifest if every entry that had a remover succeeded.
+        # Keep the manifest until every tracked submodule was removed; a
+        # skipped or failed remover means the manifest is still useful state.
         all_done = bool(result.submodules) and all(
             s.status == "removed" for s in result.submodules
         )
