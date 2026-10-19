@@ -1,0 +1,117 @@
+#!/usr/bin/python3
+"""Root-owned, argument-validating privilege helper for the forensics container.
+
+Only a fixed set of package names from the image's configured APT repositories
+may be installed or removed. This program never invokes a shell, never accepts
+APT options or local package paths, and never edits APT source/key configuration.
+"""
+from __future__ import annotations
+
+import os
+import re
+import subprocess
+import sys
+
+APT_GET = "/usr/bin/apt-get"
+CHATTR = "/usr/bin/chattr"
+AUDIT_LOG = "/var/log/forensics/audit.log"
+
+# Keep this list synchronized with apt_install() and REMOVERS in installers.py.
+# These are the only APT package names the analyst can install/remove at runtime.
+ALLOWED_PACKAGES = frozenset({
+    "amass",
+    "android-tools-adb",
+    "android-tools-fastboot",
+    "auditd",
+    "audispd-plugins",
+    "build-essential",
+    "ca-certificates",
+    "clamav",
+    "curl",
+    "dcfldd",
+    "default-jdk",
+    "default-jre-headless",
+    "dnsenum",
+    "dnsrecon",
+    "e2fsprogs",
+    "extundelete",
+    "foremost",
+    "gddrescue",
+    "git",
+    "goaccess",
+    "ifuse",
+    "ideviceinstaller",
+    "libimobiledevice-utils",
+    "libparse-win32registry-perl",
+    "libpst4",
+    "logwatch",
+    "mysql-client",
+    "ngrep",
+    "postgresql-client",
+    "pst-utils",
+    "scalpel",
+    "sqlite3",
+    "sleuthkit",
+    "tcpdump",
+    "tcpflow",
+    "testdisk",
+    "tshark",
+    "unzip",
+    "wireshark-common",
+    "yara",
+    "zeek",
+})
+
+SAFE_ENV = {
+    "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
+    "HOME": "/root",
+    "DEBIAN_FRONTEND": "noninteractive",
+    "LC_ALL": "C.UTF-8",
+}
+
+
+def fail(message: str, code: int = 2) -> int:
+    print(f"forensics-privileged: {message}", file=sys.stderr)
+    return code
+
+
+def run(argv: list[str]) -> int:
+    if os.geteuid() != 0:
+        return fail("must be invoked by sudo as root", 1)
+    if not argv:
+        return fail("missing operation")
+
+    operation, *args = argv
+    if operation == "apt-update":
+        if args:
+            return fail("apt-update takes no arguments")
+        return subprocess.run([APT_GET, "update"], env=SAFE_ENV, check=False).returncode
+
+    if operation in {"apt-install", "apt-remove"}:
+        if not args:
+            return fail(f"{operation} requires one or more package names")
+        for package in args:
+            if not re.fullmatch(r"[a-z0-9][a-z0-9+.-]*", package):
+                return fail(f"invalid package token: {package!r}")
+            if package not in ALLOWED_PACKAGES:
+                return fail(f"package is not allowlisted: {package}")
+        if operation == "apt-install":
+            command = [APT_GET, "install", "-y", "--no-install-recommends", *args]
+        else:
+            command = [APT_GET, "remove", "-y", *args]
+        return subprocess.run(command, env=SAFE_ENV, check=False).returncode
+
+    if operation == "audit-append-only":
+        if args:
+            return fail("audit-append-only takes no arguments")
+        return subprocess.run(
+            [CHATTR, "+a", AUDIT_LOG],
+            env=SAFE_ENV,
+            check=False,
+        ).returncode
+
+    return fail(f"unsupported operation: {operation!r}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(run(sys.argv[1:]))
