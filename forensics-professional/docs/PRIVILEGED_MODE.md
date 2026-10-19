@@ -12,10 +12,10 @@ you need to **`losetup` an evidence image** for live mounting.
 
 | Capability         | Why                                          |
 | :----------------- | :------------------------------------------- |
-| `CHOWN`            | Fix ownership on bind-mounted volumes.       |
+| `CHOWN`            | Legacy root-override startup only.            |
 | `DAC_OVERRIDE`     | Read evidence regardless of file perms.      |
 | `FOWNER`           | chmod on owned files.                        |
-| `SETGID` / `SETUID`| `gosu` privilege drop, `sudo` (apt/pip).     |
+| `SETGID` / `SETUID`| `gosu` root override and sudo helper.        |
 | `NET_RAW`          | tcpdump, raw sockets.                        |
 | `NET_ADMIN`        | Interface configuration for capture.         |
 | `SYS_PTRACE`       | strace, ltrace for live analysis.            |
@@ -23,12 +23,12 @@ you need to **`losetup` an evidence image** for live mounting.
 
 > **Note on `no-new-privileges`.** Earlier revisions of this project set
 > `security_opt: [no-new-privileges:true]`, which **breaks** `sudo`
-> entirely (kernel `PR_SET_NO_NEW_PRIVS` blocks setuid binaries from
-> escalating). Because the module installer relies on
-> `sudo apt-get install` and `sudo pip3 install`, that setting silently
-> rendered every `forensics-modules install <name>` a no-op. The current
-> compose file does **not** set it; defence-in-depth here is the
-> sudoers allowlist (`config/sudoers/sherlock`) instead.
+> (kernel `PR_SET_NO_NEW_PRIVS` blocks setuid binaries from escalating). The
+> current Compose file leaves it disabled so the analyst can call the
+> root-owned, argument-validating helper. That helper permits only a fixed APT
+> package allowlist, APT metadata refresh, and setting the append-only flag on
+> the fixed audit log. Python tools are installed in a sherlock-owned virtualenv;
+> no pip-as-root or arbitrary repository/file-management commands are granted.
 
 ## When you actually need `privileged: true`
 
