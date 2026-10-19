@@ -31,7 +31,6 @@ ALLOWED_PACKAGES = frozenset({
     "auditd",
     "audispd-plugins",
     "build-essential",
-    "ca-certificates",
     "clamav",
     "curl",
     "dcfldd",
@@ -68,6 +67,33 @@ ALLOWED_PACKAGES = frozenset({
     "zeek",
 })
 
+# Only packages with an explicit uninstaller in installers.py can be removed.
+ALLOWED_REMOVE_PACKAGES = frozenset({
+    "android-tools-adb",
+    "android-tools-fastboot",
+    "auditd",
+    "audispd-plugins",
+    "clamav",
+    "e2fsprogs",
+    "extundelete",
+    "foremost",
+    "libpst4",
+    "logwatch",
+    "mysql-client",
+    "ngrep",
+    "postgresql-client",
+    "pst-utils",
+    "scalpel",
+    "sleuthkit",
+    "tcpdump",
+    "tcpflow",
+    "testdisk",
+    "tshark",
+    "wireshark-common",
+    "yara",
+    "goaccess",
+})
+
 SAFE_ENV = {
     "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
     "HOME": "/root",
@@ -99,8 +125,9 @@ def run(argv: list[str]) -> int:
         for package in args:
             if not re.fullmatch(r"[a-z0-9][a-z0-9+.-]*", package):
                 return fail(f"invalid package token: {package!r}")
-            if package not in ALLOWED_PACKAGES:
-                return fail(f"package is not allowlisted: {package}")
+            allowlist = ALLOWED_PACKAGES if operation == "apt-install" else ALLOWED_REMOVE_PACKAGES
+            if package not in allowlist:
+                return fail(f"package is not allowlisted for {operation}: {package}")
         if operation == "apt-install":
             command = [APT_GET, "install", "-y", "--no-install-recommends", *args]
         else:
