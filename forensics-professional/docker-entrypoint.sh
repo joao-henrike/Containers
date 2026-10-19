@@ -2,8 +2,9 @@
 # ==============================================================================
 # Forensics Professional — Container Entrypoint
 # ==============================================================================
-# Phase 1 (root): bootstrap directories, keys, audit log, GPG keyring
-# Phase 2:        drop privileges to sherlock via gosu and exec the user CMD
+# Default mode runs as sherlock and bootstraps only user-owned paths.
+# Explicit root override retains legacy directory ownership setup, then drops
+# privileges to sherlock via gosu before executing the requested command.
 #
 # This script is invoked by tini (PID 1). Signals are forwarded properly.
 # ==============================================================================
