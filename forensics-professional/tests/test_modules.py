@@ -177,6 +177,13 @@ def test_chain_logger_noise_filter():
     assert not _is_noisy("cat /evidence/file.txt")
 
 
+def test_keygen_rejects_short_programmatic_passphrase(tmp_audit_env, tmp_path):
+    from forensics.quantum.keygen import generate
+
+    with pytest.raises(ValueError, match="at least 12 characters"):
+        generate(tmp_path / "keys", "short")
+
+
 def test_quantum_keygen_round_trip(tmp_audit_env):
     """Encrypted key blobs round-trip via the file format."""
     from forensics.quantum.keygen import encrypt_secret, decrypt_secret
