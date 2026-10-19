@@ -12,8 +12,8 @@ guarantees so you can decide whether the design fits your use case.
 | Audit log is append-only on the host       | Best-effort (filesystem-dep) |
 | Audit log is **tamper-evident**            | Yes (hash chain + Ed25519)   |
 | Audit log is **tamper-proof**              | **No** — see below           |
-| `sherlock` cannot escalate via sudo        | Yes (sudoers explicit list)  |
-| Privileged ops require PQC challenge       | Yes (`quantum-root`)         |
+| `sherlock` cannot escalate via sudo        | Not yet assured; wildcard rules need remediation |
+| Privileged ops require PQC challenge       | Intended for `quantum-root`; not all privilege paths |
 | Cryptographic non-repudiation in court     | **No** — see below           |
 | Zero-trust against the analyst             | **No** — by design           |
 
@@ -25,8 +25,11 @@ The analyst account. Owns `/cases`, `/reports`, `/var/log/forensics`, and
 `/opt/forensics/quantum-keys`. Permitted to:
 
 - Run any forensic tool installed in the container.
-- Use `sudo` for the specific apt/pip commands listed in
-  [`config/sudoers.d-sherlock`](../config/sudoers.d-sherlock).
+- Use `sudo` according to the policy in
+  [`config/sudoers/sherlock`](config/sudoers/sherlock). **The current policy
+  contains broad wildcard rules that have not yet been safely narrowed; do not
+  treat it as a hardened privilege boundary until that remediation is approved
+  and validated.**
 - Append to the audit log.
 - Authenticate to `quantum-root` to obtain a privileged shell (when the
   PQC keypair has been generated and the passphrase is known).
@@ -47,8 +50,9 @@ reachable only via:
 1. The Docker daemon (`docker exec -u root` from the host).
 2. `quantum-root` (after a successful ML-DSA-65 challenge).
 
-There is no in-container path from `sherlock` to `root` without PQC
-authentication or daemon-level access.
+The intended policy is to require PQC authentication or daemon-level access
+for root. However, the currently committed sudoers wildcard rules mean this
+claim is not yet established for the running image.
 
 ## Tamper-evident vs tamper-proof
 
@@ -82,12 +86,12 @@ upload to any of the above.
 
 ## Privilege model details
 
-The runtime container runs with:
+The runtime container is configured with:
 
 - `cap_drop: [ALL]`
 - `cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID, NET_RAW,
   NET_ADMIN, SYS_PTRACE, LINUX_IMMUTABLE]`
-- `security_opt: [no-new-privileges:true]`
+- `no-new-privileges` is **not enabled** in the current Compose file.
 
 `privileged: true` is **off by default**. Enable it only if you need to
 mount disk images via loop devices for live analysis (e.g., for
