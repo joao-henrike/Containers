@@ -27,9 +27,11 @@ approach:
   (binary on PATH, Python module importable, file on disk).
 - **Audited operations.** Every install/remove and every shell command run
   by the analyst is captured in a signed, hash-chained log.
-- **Honest privilege model.** `sherlock` is the analyst account; sudo is
-  restricted to the specific apt/pip commands installers need. There is no
-  shell-via-sudo path.
+- **Restricted privilege model.** The image defaults to `sherlock`. Sudo
+  grants access only to a root-owned helper that validates a fixed APT package
+  allowlist and one fixed audit-log append-only operation. Python tools install
+  into a sherlock-owned virtualenv; no runtime APT source/key edits, `pip` as
+  root, arbitrary file placement as root, or root shell are allowed.
 
 ## Quickstart
 
@@ -37,7 +39,11 @@ approach:
 git clone https://github.com/joao-henrike/Containers.git
 cd Containers/forensics-professional
 
-# Build & start
+# Prepare bind mounts as the current host user (do not run this as root)
+export HOST_UID="$(id -u)"
+mkdir -p evidence cases logs keys reports
+
+# Build with sherlock mapped to your non-root host UID, then start
 docker compose build
 docker compose up -d
 
@@ -109,12 +115,11 @@ forensics-health quick-check         # used by Docker HEALTHCHECK
 ## Privileged operations (post-quantum auth)
 
 The repository includes a `quantum-root` challenge-response flow using ML-DSA-65,
-but the final sudo handoff is not yet implemented and validated. It therefore
-fails closed and must **not** be considered a working way to obtain root. The
-key-generation script may also require a sudoers rule that is not currently
-present. Use `docker compose exec --user sherlock forensics bash` for routine
-analyst access; avoid root `exec` sessions unless the operator explicitly
-intends to run commands as root. See [`docs/PRIVILEGED_MODE.md`](docs/PRIVILEGED_MODE.md)
+but the final sudo handoff is not implemented and validated; it fails closed
+and must not be considered a working root shell. Key generation and everyday
+analysis run as `sherlock` without sudo. The only sudo permission is the
+root-owned validating helper used for allowlisted package operations and the
+fixed audit-log append-only bit. See [`docs/PRIVILEGED_MODE.md`](docs/PRIVILEGED_MODE.md)
 for the intended design and remaining limitations.
 
 ## Configuration
@@ -141,7 +146,8 @@ forensics-professional/
 ├── requirements.txt                # pinned Python deps
 ├── config/
 │   ├── config.yaml                 # default deployment config
-│   └── sudoers/sherlock            # sudo policy (wildcards need remediation)
+│   ├── sudoers/sherlock            # single root-helper rule
+│   └── forensics-privileged        # input-validating root helper
 ├── core/
 │   ├── audit-system/               # forensics-audit, quantum-root, hooks
 │   ├── module-manager/             # forensics-modules
