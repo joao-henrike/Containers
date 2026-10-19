@@ -9,8 +9,8 @@
 # Design notes
 # ------------
 # • Multi-stage: builder compiles liboqs (post-quantum), runtime stays slim.
-# • Honest privilege model: sherlock runs everything; sudo restricted to
-#   apt-get/pip via /etc/sudoers.d/sherlock-forensics (no shell escalation).
+# • Restricted privilege model: sherlock is the default user; sudo invokes
+#   only the root-owned, validating package/audit helper (no root pip or shell).
 # • gosu is installed and verified — the entrypoint relies on it.
 # • USER sherlock is the default; root is disabled (passwd -l).
 # • HEALTHCHECK exposes liveness to docker/compose orchestration.
