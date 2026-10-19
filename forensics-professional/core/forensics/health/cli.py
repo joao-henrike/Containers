@@ -18,6 +18,7 @@ def _load_legacy_main() -> Callable[[list[str] | None], int]:
     here = Path(__file__).resolve()
     repo_or_install_root = here.parent.parent.parent.parent
     candidates = [
+        Path(sys.prefix) / "share" / "forensics-professional" / "bin" / "forensics-health",
         repo_or_install_root / "scripts" / "forensics-health",
         Path("/opt/forensics/bin/forensics-health"),
     ]
