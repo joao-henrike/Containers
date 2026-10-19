@@ -125,7 +125,7 @@ def test_corrupt_final_line_is_not_ignored(tmp_audit_env):
     log = AuditLogger(strict=True)
     log.log_event("signed_event", {})
     with Path(log.log_path).open("a", encoding="utf-8") as fh:
-        fh.write("not json\\n")
+        fh.write("not json\n")
 
     result = log.verify()
     assert result["status"] == "ERROR"
@@ -139,7 +139,7 @@ def test_missing_prefix_is_detected(tmp_audit_env):
     log.log_event("second", {})
     log_file = Path(log.log_path)
     lines = log_file.read_text(encoding="utf-8").splitlines()
-    log_file.write_text(lines[1] + "\\n", encoding="utf-8")
+    log_file.write_text(lines[1] + "\n", encoding="utf-8")
 
     result = log.verify()
     assert result["status"] == "INVALID"
