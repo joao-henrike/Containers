@@ -58,6 +58,13 @@ run_as_user() {
 }
 
 # ── 1. Filesystem layout for mounted volumes ────────────────────────────────
+if [[ "${ROOT_MODE}" -eq 0 ]]; then
+    for writable_dir in "${LOGS_DIR}" "${KEYS_DIR}" /cases /reports; do
+        [[ -d "${writable_dir}" ]] || die "${writable_dir} must exist on the host before startup."
+        [[ -w "${writable_dir}" ]] || die "${writable_dir} is not writable by UID $(id -u). Prepare the host bind-mount directory for HOST_UID before starting the container."
+    done
+fi
+
 mkdir -p \
     "${LOGS_DIR}/installations" \
     "${LOGS_DIR}/chain-of-custody/$(date -u +%Y/%m/%d)" \
@@ -67,10 +74,6 @@ mkdir -p \
 
 if [[ "${ROOT_MODE}" -eq 1 ]]; then
     chown -R "${RUN_USER}:${RUN_USER}" "${LOGS_DIR}" "${KEYS_DIR}" /cases /reports
-else
-    for writable_dir in "${LOGS_DIR}" "${KEYS_DIR}" /cases /reports; do
-        [[ -w "${writable_dir}" ]] || die "${writable_dir} is not writable by UID $(id -u). Prepare the host bind-mount directory for HOST_UID before starting the container."
-    done
 fi
 chmod 0750 "${KEYS_DIR}" || die "cannot secure key directory permissions"
 
