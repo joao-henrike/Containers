@@ -108,25 +108,14 @@ forensics-health quick-check         # used by Docker HEALTHCHECK
 
 ## Privileged operations (post-quantum auth)
 
-Some operations need genuine root inside the container (kernel module
-load, raw device access). To gate this behind a strong authenticator:
-
-```bash
-# One-time setup: generate the ML-DSA-65 keypair (asks for a passphrase)
-sudo /opt/forensics/bin/generate-quantum-keys.sh
-
-# Authenticate and obtain a root shell
-quantum-root
-```
-
-`quantum-root` runs a real challenge-response with ML-DSA-65 (NIST FIPS 204).
-**There is no fallback success path** — if the keys are missing or the
-passphrase is wrong, authentication fails. See
-[`docs/PRIVILEGED_MODE.md`](docs/PRIVILEGED_MODE.md).
-
-If you don't need PQC authentication, ordinary `sudo apt-get install <pkg>`
-also works for whitelisted commands; you don't need `quantum-root` to
-install modules.
+The repository includes a `quantum-root` challenge-response flow using ML-DSA-65,
+but the final sudo handoff is not yet implemented and validated. It therefore
+fails closed and must **not** be considered a working way to obtain root. The
+key-generation script may also require a sudoers rule that is not currently
+present. Use `docker compose exec --user sherlock forensics bash` for routine
+analyst access; avoid root `exec` sessions unless the operator explicitly
+intends to run commands as root. See [`docs/PRIVILEGED_MODE.md`](docs/PRIVILEGED_MODE.md)
+for the intended design and remaining limitations.
 
 ## Configuration
 
@@ -145,14 +134,14 @@ or by setting environment variables:
 
 ```
 forensics-professional/
-├── Dockerfile                      # multi-stage, gosu-verified, USER sherlock
+├── Dockerfile                      # multi-stage build, gosu-based entrypoint drop
 ├── docker-compose.yml              # cap_drop ALL + cap_add specifics
 ├── docker-entrypoint.sh            # tini-wrapped, gosu-based privilege drop
 ├── VERSION                         # single source of truth
 ├── requirements.txt                # pinned Python deps
 ├── config/
 │   ├── config.yaml                 # default deployment config
-│   └── sudoers.d-sherlock          # restricted sudo policy
+│   └── sudoers/sherlock            # sudo policy (wildcards need remediation)
 ├── core/
 │   ├── audit-system/               # forensics-audit, quantum-root, hooks
 │   ├── module-manager/             # forensics-modules
