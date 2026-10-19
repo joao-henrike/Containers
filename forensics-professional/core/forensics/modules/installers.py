@@ -13,8 +13,11 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
 import shlex
+import signal
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Callable, Iterator
@@ -99,23 +102,60 @@ class CommandRunner:
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            start_new_session=True,
         )
         assert proc.stdout is not None
 
-        deadline = time.monotonic() + self.timeout
-        try:
-            for raw in proc.stdout:
-                self._log(raw.rstrip())
-                if time.monotonic() > deadline:
-                    proc.terminate()
-                    raise subprocess.TimeoutExpired(cmd=cmd, timeout=self.timeout)
-        finally:
-            try:
-                rc = proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                rc = proc.wait()
+        # Read output separately so a silent child or a stream without newlines
+        # cannot block enforcement of the configured timeout.
+        output: queue.Queue[str | None] = queue.Queue()
 
+        def pump_output() -> None:
+            try:
+                for raw in proc.stdout:
+                    output.put(raw)
+            finally:
+                output.put(None)
+
+        reader = threading.Thread(target=pump_output, daemon=True)
+        reader.start()
+        deadline = time.monotonic() + self.timeout
+        timed_out = False
+
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                break
+            try:
+                raw = output.get(timeout=remaining)
+            except queue.Empty:
+                timed_out = True
+                break
+            if raw is None:
+                break
+            self._log(raw.rstrip())
+
+        if timed_out:
+            # Installers can spawn nested shells, curl, compilers, and package
+            # managers; terminate the whole process group on timeout.
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                proc.wait()
+            reader.join(timeout=1)
+            raise subprocess.TimeoutExpired(cmd=cmd, timeout=self.timeout)
+
+        rc = proc.wait()
+        reader.join(timeout=1)
         if rc != 0 and not ignore_failure:
             raise RuntimeError(f"command exited {rc}: {cmd}")
         return rc
@@ -135,15 +175,25 @@ def cloud_aws(r: CommandRunner) -> None:
         "curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip "
         "-o /tmp/awscliv2.zip && "
         "unzip -qo /tmp/awscliv2.zip -d /tmp && "
-        "sudo /tmp/aws/install --update && "
+        "if /opt/forensics/bin/aws --version >/dev/null 2>&1; then "
+        "/tmp/aws/install --install-dir /opt/forensics/aws-cli "
+        "--bin-dir /opt/forensics/bin --update; else "
+        "/tmp/aws/install --install-dir /opt/forensics/aws-cli "
+        "--bin-dir /opt/forensics/bin; fi && "
         "rm -rf /tmp/aws /tmp/awscliv2.zip",
     )
     r.pip_install("boto3", "s3transfer")
 
 
 def cloud_azure(r: CommandRunner) -> None:
-    r.shell("curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash")
-    r.pip_install("azure-mgmt-compute", "azure-mgmt-storage", "azure-identity")
+    # Use the explicitly permitted pip installer instead of piping a remote
+    # script into a sudo shell that the policy intentionally denies.
+    r.pip_install(
+        "azure-cli",
+        "azure-mgmt-compute",
+        "azure-mgmt-storage",
+        "azure-identity",
+    )
 
 
 def cloud_gcp(r: CommandRunner) -> None:
@@ -258,8 +308,8 @@ def mobile_backup_extractors(r: CommandRunner) -> None:
         "rm -rf /tmp/abe && "
         "git clone --depth 1 https://github.com/nelenkov/android-backup-extractor /tmp/abe && "
         "cd /tmp/abe && ./gradlew --no-daemon && "
-        "sudo mkdir -p /opt/forensics/tools && "
-        "sudo cp build/libs/abe-all.jar /opt/forensics/tools/abe.jar && "
+        "mkdir -p /opt/forensics/tools && "
+        "cp build/libs/abe-all.jar /opt/forensics/tools/abe.jar && "
         "rm -rf /tmp/abe",
     )
 
@@ -348,7 +398,8 @@ def container_docker(r: CommandRunner) -> None:
         "                 if 'linux_amd64' in a['name'] and a['name'].endswith('.tar.gz')), ''))\") && "
         "[ -n \"$URL\" ] && "
         "  curl -fsSL \"$URL\" -o /tmp/dive.tar.gz && "
-        "  sudo tar -xzf /tmp/dive.tar.gz -C /usr/local/bin dive && "
+        "  tar -xzf /tmp/dive.tar.gz -C /opt/forensics/bin dive && "
+        "  chmod 0755 /opt/forensics/bin/dive && "
         "  rm -f /tmp/dive.tar.gz",
     )
 
