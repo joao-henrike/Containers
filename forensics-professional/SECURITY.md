@@ -12,8 +12,8 @@ guarantees so you can decide whether the design fits your use case.
 | Audit log is append-only on the host       | Best-effort (filesystem-dep) |
 | Audit log is **tamper-evident**            | Yes (hash chain + Ed25519)   |
 | Audit log is **tamper-proof**              | **No** — see below           |
-| `sherlock` cannot escalate via sudo        | Not yet assured; wildcard rules need remediation |
-| Privileged ops require PQC challenge       | Intended for `quantum-root`; not all privilege paths |
+| `sherlock` sudo permissions                | Root-owned helper only; allowlist checks require validation |
+| Privileged ops require PQC challenge       | `quantum-root` remains fail-closed; helper permits fixed operations |
 | Cryptographic non-repudiation in court     | **No** — see below           |
 | Zero-trust against the analyst             | **No** — by design           |
 
@@ -25,35 +25,38 @@ The analyst account. Owns `/cases`, `/reports`, `/var/log/forensics`, and
 `/opt/forensics/quantum-keys`. Permitted to:
 
 - Run any forensic tool installed in the container.
-- Use `sudo` according to the policy in
-  [`config/sudoers/sherlock`](config/sudoers/sherlock). **The current policy
-  contains broad wildcard rules that have not yet been safely narrowed; do not
-  treat it as a hardened privilege boundary until that remediation is approved
-  and validated.**
+- Use `sudo` only for the root-owned, input-validating helper specified in
+  [`config/sudoers/sherlock`](config/sudoers/sherlock). It allows a fixed APT
+  package allowlist, APT metadata refresh, and setting the append-only bit on
+  the canonical audit log. It rejects APT options, local package paths,
+  repository/key changes, arbitrary file paths, and shell commands.
 - Append to the audit log.
 - The `quantum-root` flow exists but currently fails closed because its sudo
   handoff is not implemented and validated; do not rely on it for escalation.
 
 Explicitly **not** permitted:
 
-- Generic root-shell escalation is intended to be denied, but the wildcard
-  sudoers rules have not been validated as a complete security boundary. Do not
-  treat the current policy as proof that every path to root is blocked.
+- Direct root-shell escalation (`sudo bash`, `sudo su`, `sudo -i`, `sudo -s`)
+  is not granted by sudoers. The only sudo entry invokes the fixed helper; its
+  allowlist and image behavior still require automated build and runtime
+  validation before this can be treated as a verified boundary.
 - Editing `/etc/passwd`, `/etc/shadow`, or the sudoers files.
 - Generic `chattr` on arbitrary paths.
 
 ### `root` — locked
 
-The container's `root` account is **password-locked** (`passwd -l`), but that
-alone does not prevent root processes from being started by Docker. Use
-`docker compose exec --user sherlock ...` for analyst commands. The current
-image has no final Dockerfile `USER` directive, so Compose `exec` without an
-explicit `--user` runs as root. The `quantum-root` escalation flow is currently
-fail-closed until its sudo handoff is implemented and validated.
+The container's `root` account is **password-locked** (`passwd -l`), and the
+Dockerfile sets `USER sherlock` as the default runtime identity. The entrypoint
+supports rootless initialization, and bind-mounted directories must exist and
+be writable by the configured non-root UID. A host operator can still start a
+separate process as root through the Docker daemon. The `quantum-root`
+escalation flow remains fail-closed because its sudo handoff is not implemented
+and validated.
 
-The intended policy is to require PQC authentication or daemon-level access
-for root. However, the currently committed sudoers wildcard rules mean this
-claim is not yet established for the running image.
+The intended policy keeps arbitrary in-container root shells unavailable to
+`sherlock`; the helper still permits a bounded set of package maintenance
+commands as root. This boundary must be confirmed by automated build and
+regression tests before release.
 
 ## Tamper-evident vs tamper-proof
 
