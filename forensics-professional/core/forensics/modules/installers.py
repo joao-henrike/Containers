@@ -66,8 +66,8 @@ class CommandRunner:
     def apt_install(self, *packages: str) -> None:
         if not packages:
             return
-        self.run(["sudo", "DEBIAN_FRONTEND=noninteractive",
-                  "apt-get", "install", "-y", *packages],
+        self.run(["sudo", "/usr/bin/env", "DEBIAN_FRONTEND=noninteractive",
+                  "/usr/bin/apt-get", "install", "-y", *packages],
                  ignore_failure=False)
 
     def apt_update(self) -> None:
@@ -122,6 +122,7 @@ class CommandRunner:
         deadline = time.monotonic() + self.timeout
         timed_out = False
 
+        rc: int | None = None
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -133,6 +134,12 @@ class CommandRunner:
                 timed_out = True
                 break
             if raw is None:
+                # EOF does not prove the child exited: a subprocess may close
+                # stdout and continue doing work. Bound wait() by the deadline.
+                try:
+                    rc = proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    timed_out = True
                 break
             self._log(raw.rstrip())
 
@@ -154,7 +161,8 @@ class CommandRunner:
             reader.join(timeout=1)
             raise subprocess.TimeoutExpired(cmd=cmd, timeout=self.timeout)
 
-        rc = proc.wait()
+        if rc is None:
+            rc = proc.wait(timeout=max(0.0, deadline - time.monotonic()))
         reader.join(timeout=1)
         if rc != 0 and not ignore_failure:
             raise RuntimeError(f"command exited {rc}: {cmd}")
