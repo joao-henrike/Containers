@@ -18,6 +18,7 @@ services:
       dockerfile: Dockerfile
       args:
         UBUNTU_VERSION: "22.04"
+        SHERLOCK_UID: "${HOST_UID:-1000}"
     image: forensics-professional:3.0.0
     container_name: forensics-workstation
     hostname: forensics-lab
@@ -69,8 +70,6 @@ services:
     environment:
       TZ: UTC
       FORENSICS_USER: sherlock
-      FORENSICS_HOST_UID: "${HOST_UID:-1000}"
-      FORENSICS_HOST_GID: "${HOST_GID:-1000}"
 
     # ── Volumes ─────────────────────────────────────────────────────────────
     volumes:
@@ -78,27 +77,37 @@ services:
       - type: bind
         source: ./evidence
         target: /evidence
+        bind:
+          create_host_path: false
         read_only: true
 
       # Working directory for the analyst
       - type: bind
         source: ./cases
         target: /cases
+        bind:
+          create_host_path: false
 
       # Audit logs (persisted across container restarts)
       - type: bind
         source: ./logs
         target: /var/log/forensics
+        bind:
+          create_host_path: false
 
       # Cryptographic keys (Ed25519, GPG, optional ML-DSA-65)
       - type: bind
         source: ./keys
         target: /opt/forensics/quantum-keys
+        bind:
+          create_host_path: false
 
       # Generated reports
       - type: bind
         source: ./reports
         target: /reports
+        bind:
+          create_host_path: false
 
       # User configuration overrides — only the public config; sudoers fragment
       # is baked into the image at build time, NOT bind-mounted.
@@ -106,6 +115,8 @@ services:
         source: ./config/config.yaml
         target: /etc/forensics/config.yaml
         read_only: true
+        bind:
+          create_host_path: false
 
     # ── Healthcheck (defined in Dockerfile) is honoured automatically ───────
 
