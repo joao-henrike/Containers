@@ -50,12 +50,11 @@ services:
     # via `forensics-modules install <name>`. Setting no-new-privileges would
     # break every module installer with "sudo: effective uid is not 0".
     #
-    # Defence-in-depth here is the *sudoers allowlist*, not no-new-privileges:
-    #   - shell escalation (sudo bash / sudo su / sudo -i) → DENIED
-    #   - editing /etc/passwd, /etc/shadow, sudoers          → DENIED
-    #   - chattr / chmod on arbitrary paths                  → DENIED
-    #   - generic command execution                          → DENIED
-    # See config/sudoers/sherlock and SECURITY.md for the threat model.
+    # The intended defence-in-depth is an argument-restricted sudoers policy.
+    # However, broad wildcard rules in config/sudoers/sherlock need remediation
+    # before this can be treated as a security boundary. Do not rely on these
+    # comments as proof that path traversal or every privilege path is denied.
+    # See SECURITY.md for the current limitations and pending hardening.
 
     # ── Resources (override per host) ────────────────────────────────────────
     # Compose v2 honours these directly; no `deploy:` block needed.
