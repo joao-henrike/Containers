@@ -275,7 +275,8 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
 # ──────────────────────────────────────────────────────────────────────────────
 # 8. Environment
 # ──────────────────────────────────────────────────────────────────────────────
-ENV FORENSICS_HOME="/opt/forensics" \
+ENV HOME="/home/sherlock" \
+    FORENSICS_HOME="/opt/forensics" \
     FORENSICS_LOGS="/var/log/forensics" \
     FORENSICS_MODULES="/opt/forensics/modules" \
     FORENSICS_KEYS="/opt/forensics/quantum-keys" \
