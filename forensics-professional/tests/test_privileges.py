@@ -68,6 +68,7 @@ def test_package_remove_is_allowlisted_and_has_fixed_arguments(monkeypatch):
     assert helper["run"](["apt-remove", "tcpdump"]) == 0
     assert calls == [["/usr/bin/apt-get", "remove", "-y", "tcpdump"]]
     assert helper["run"](["apt-remove", "bash"]) == 2
+    assert helper["run"](["apt-remove", "git"]) == 2
     assert len(calls) == 1
 
 
