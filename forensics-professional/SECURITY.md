@@ -31,14 +31,14 @@ The analyst account. Owns `/cases`, `/reports`, `/var/log/forensics`, and
   treat it as a hardened privilege boundary until that remediation is approved
   and validated.**
 - Append to the audit log.
-- Authenticate to `quantum-root` to obtain a privileged shell (when the
-  PQC keypair has been generated and the passphrase is known).
+- The `quantum-root` flow exists but currently fails closed because its sudo
+  handoff is not implemented and validated; do not rely on it for escalation.
 
 Explicitly **not** permitted:
 
-- `sudo bash`, `sudo su`, `sudo -i`, `sudo -s`, or any other path to a
-  generic root shell. The sudoers policy is whitelist-only with explicit
-  argument patterns.
+- Generic root-shell escalation is intended to be denied, but the wildcard
+  sudoers rules have not been validated as a complete security boundary. Do not
+  treat the current policy as proof that every path to root is blocked.
 - Editing `/etc/passwd`, `/etc/shadow`, or the sudoers files.
 - Generic `chattr` on arbitrary paths.
 
