@@ -61,6 +61,11 @@ package-dir = {"" = "core"}
 [tool.setuptools.packages.find]
 where = ["core"]
 
+[tool.setuptools.data-files]
+"share/forensics-professional/core/module-manager" = ["core/module-manager/forensics-modules"]
+"share/forensics-professional/core/audit-system" = ["core/audit-system/forensics-audit"]
+"share/forensics-professional/bin" = ["scripts/forensics-health"]
+
 [tool.setuptools.dynamic]
 version = {file = "VERSION"}
 
