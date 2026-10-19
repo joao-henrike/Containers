@@ -106,7 +106,6 @@ def test_stats_output(tmp_audit_env):
     assert stats["event_counts"]["type_b"] == 1
 
 
-
 def test_missing_public_key_fails_closed(tmp_audit_env):
     from forensics.audit.logger import AuditLogger
 
