@@ -53,14 +53,20 @@ to extend it or audit it.
 
 ### Container start
 
-1. `tini` (PID 1) execs `docker-entrypoint.sh` as root.
-2. Entrypoint creates log directories, generates Ed25519 + GPG keys
-   (only on first boot), bootstraps the audit-log genesis entry, marks
-   the log append-only, and writes `/home/sherlock/.bashrc`.
-3. Entrypoint records a `container_started` audit event.
-4. Entrypoint exec's `gosu sherlock <CMD>`. The default CMD is `bash`.
-5. Bash sources `.bashrc`, which sources `bash-hooks.sh`.
-6. The DEBUG trap and PROMPT_COMMAND are now armed.
+1. The image sets `USER sherlock`; `tini` (PID 1) normally starts
+   `docker-entrypoint.sh` as the non-root analyst.
+2. The entrypoint requires the host bind-mount directories to exist and be
+   writable by `sherlock`, then creates its user-owned subdirectories.
+3. On first boot it generates Ed25519 and GPG keys, initializes the audit
+   genesis entry, and asks the restricted helper to set the append-only flag
+   on the fixed audit log (when the filesystem supports it).
+4. It writes `/home/sherlock/.bashrc`, records a `container_started` event,
+   and execs the requested command as `sherlock` (default `bash`).
+5. Bash sources `.bashrc` and `bash-hooks.sh`; the DEBUG trap and
+   PROMPT_COMMAND are armed.
+
+An explicit root override still takes the legacy initialization path and drops
+back to `sherlock` with `gosu`; it is not the default runtime identity.
 
 ### A user runs a command
 
@@ -113,8 +119,10 @@ This is fire-and-forget: the analyst's prompt returns immediately.
    - Signs it with the decrypted key (ML-DSA-65).
    - Verifies the signature against the public key.
    - Logs success or specific failure mode.
-3. The shell wrapper exec's `sudo -i` on success, exits non-zero
-   otherwise.
+3. The shell wrapper uses the configured escalation policy after recording
+   the authentication result. The default is `none`, and the current sudo
+   policy deliberately denies `sudo -i`; a successful challenge does not
+   grant a root shell until a separate handoff is implemented and validated.
 
 ## Why each piece exists
 
