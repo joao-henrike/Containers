@@ -7,14 +7,20 @@ APT options or local package paths, and never edits APT source/key configuration
 """
 from __future__ import annotations
 
+import fcntl
 import os
+import pwd
 import re
+import stat
+import struct
 import subprocess
 import sys
 
 APT_GET = "/usr/bin/apt-get"
-CHATTR = "/usr/bin/chattr"
 AUDIT_LOG = "/var/log/forensics/audit.log"
+FS_IOC_GETFLAGS = 0x80086601
+FS_IOC_SETFLAGS = 0x40086602
+FS_APPEND_FL = 0x00000020
 
 # Keep this list synchronized with apt_install() and REMOVERS in installers.py.
 # These are the only APT package names the analyst can install/remove at runtime.
@@ -104,11 +110,26 @@ def run(argv: list[str]) -> int:
     if operation == "audit-append-only":
         if args:
             return fail("audit-append-only takes no arguments")
-        return subprocess.run(
-            [CHATTR, "+a", AUDIT_LOG],
-            env=SAFE_ENV,
-            check=False,
-        ).returncode
+        # Do not pass a user-writable pathname to a root chattr process: open
+        # the fixed path without following symlinks, then mutate only that fd.
+        try:
+            fd = os.open(AUDIT_LOG, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        except OSError as exc:
+            return fail(f"cannot safely open audit log: {exc}", 1)
+        try:
+            info = os.fstat(fd)
+            expected_uid = pwd.getpwnam("sherlock").pw_uid
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != expected_uid:
+                return fail("audit log must be a regular file owned by sherlock", 1)
+            current = struct.unpack("I", fcntl.ioctl(fd, FS_IOC_GETFLAGS, struct.pack("I", 0)))[0]
+            if current & FS_APPEND_FL:
+                return 0
+            fcntl.ioctl(fd, FS_IOC_SETFLAGS, struct.pack("I", current | FS_APPEND_FL))
+            return 0
+        except OSError as exc:
+            return fail(f"cannot set append-only flag: {exc}", 1)
+        finally:
+            os.close(fd)
 
     return fail(f"unsupported operation: {operation!r}")
 
