@@ -89,6 +89,7 @@ init_audit_log() {
         fi
         chmod 0640 "${AUDIT_LOG}"
     fi
+    [[ -w "${AUDIT_LOG}" ]] || die "${AUDIT_LOG} is not writable by UID $(id -u). Fix the host bind-mount ownership before restarting."
 
     # Genesis entry only if the log is empty.
     if [[ ! -s "${AUDIT_LOG}" ]]; then
@@ -115,6 +116,8 @@ init_audit_log
 # ── 3. Cryptographic key bootstrap ───────────────────────────────────────────
 init_ed25519() {
     if [[ -f "${KEYS_DIR}/audit_ed25519.key" ]]; then
+        [[ -r "${KEYS_DIR}/audit_ed25519.key" && -r "${KEYS_DIR}/audit_ed25519.pub" ]] \
+            || die "existing Ed25519 keypair is not readable by UID $(id -u). Fix host key-directory ownership."
         return 0
     fi
     log "generating Ed25519 audit-signing keypair"
@@ -140,6 +143,10 @@ init_gpg() {
     if run_as_user gpg --list-keys forensics-audit@professional.local \
             >/dev/null 2>&1; then
         return 0
+    fi
+
+    if [[ -f "${pass_file}" && ! -r "${pass_file}" ]]; then
+        die "existing GPG passphrase file is not readable by UID $(id -u). Fix host key-directory ownership."
     fi
 
     if [[ ! -f "${pass_file}" ]]; then
