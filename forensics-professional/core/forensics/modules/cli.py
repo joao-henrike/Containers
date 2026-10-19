@@ -32,6 +32,7 @@ def _load_legacy_main() -> Callable[[list[str] | None], int]:
     # forensics/modules/cli.py -> forensics/modules -> forensics -> core -> repo
     repo_or_install_root = here.parent.parent.parent.parent
     candidates = [
+        Path(sys.prefix) / "share" / "forensics-professional" / "core" / "module-manager" / "forensics-modules",
         repo_or_install_root / "core" / "module-manager" / "forensics-modules",
         repo_or_install_root / "module-manager" / "forensics-modules",
         Path("/opt/forensics/core/module-manager/forensics-modules"),
