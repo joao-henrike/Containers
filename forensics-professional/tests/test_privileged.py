@@ -138,9 +138,9 @@ def test_audit_append_only_opens_fixed_path_nonblocking_and_sets_only_append(
     def fake_ioctl(fd, request, argument):
         ioctls.append((fd, request, argument))
         if request == privileged_helper["FS_IOC_GETFLAGS"]:
-            return struct.pack("I", 0)
+            return struct.pack("@L", 0)
         assert request == privileged_helper["FS_IOC_SETFLAGS"]
-        assert struct.unpack("I", argument)[0] == privileged_helper["FS_APPEND_FL"]
+        assert struct.unpack("@L", argument)[0] == privileged_helper["FS_APPEND_FL"]
         return argument
 
     monkeypatch.setattr(helper_fcntl, "ioctl", fake_ioctl)
