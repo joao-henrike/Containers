@@ -18,8 +18,11 @@ import sys
 
 APT_GET = "/usr/bin/apt-get"
 AUDIT_LOG = "/var/log/forensics/audit.log"
-FS_IOC_GETFLAGS = 0x80086601
-FS_IOC_SETFLAGS = 0x40086602
+# Encode the native unsigned-long size used by Linux's _IOR/_IOW ioctl macros.
+_NATIVE_LONG_FORMAT = "@L"
+_NATIVE_LONG_SIZE = struct.calcsize(_NATIVE_LONG_FORMAT)
+FS_IOC_GETFLAGS = (2 << 30) | (_NATIVE_LONG_SIZE << 16) | (ord("f") << 8) | 1
+FS_IOC_SETFLAGS = (1 << 30) | (_NATIVE_LONG_SIZE << 16) | (ord("f") << 8) | 2
 FS_APPEND_FL = 0x00000020
 
 # Keep this list synchronized with apt_install() and REMOVERS in installers.py.
@@ -148,10 +151,10 @@ def run(argv: list[str]) -> int:
             expected_uid = pwd.getpwnam("sherlock").pw_uid
             if not stat.S_ISREG(info.st_mode) or info.st_uid != expected_uid:
                 return fail("audit log must be a regular file owned by sherlock", 1)
-            current = struct.unpack("I", fcntl.ioctl(fd, FS_IOC_GETFLAGS, struct.pack("I", 0)))[0]
+            current = struct.unpack(_NATIVE_LONG_FORMAT, fcntl.ioctl(fd, FS_IOC_GETFLAGS, struct.pack(_NATIVE_LONG_FORMAT, 0)))[0]
             if current & FS_APPEND_FL:
                 return 0
-            fcntl.ioctl(fd, FS_IOC_SETFLAGS, struct.pack("I", current | FS_APPEND_FL))
+            fcntl.ioctl(fd, FS_IOC_SETFLAGS, struct.pack(_NATIVE_LONG_FORMAT, current | FS_APPEND_FL))
             return 0
         except OSError as exc:
             return fail(f"cannot set append-only flag: {exc}", 1)
