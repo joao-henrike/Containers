@@ -12,8 +12,8 @@ guarantees so you can decide whether the design fits your use case.
 | Audit log is append-only on the host       | Best-effort (filesystem-dep) |
 | Audit log is **tamper-evident**            | Yes (hash chain + Ed25519)   |
 | Audit log is **tamper-proof**              | **No** — see below           |
-| `sherlock` cannot escalate via sudo        | Yes (sudoers explicit list)  |
-| Privileged ops require PQC challenge       | Yes (`quantum-root`)         |
+| `sherlock` sudo permissions                | Root-owned helper only; allowlist checks require validation |
+| Privileged ops require PQC challenge       | `quantum-root` remains fail-closed; helper permits fixed operations |
 | Cryptographic non-repudiation in court     | **No** — see below           |
 | Zero-trust against the analyst             | **No** — by design           |
 
@@ -25,30 +25,38 @@ The analyst account. Owns `/cases`, `/reports`, `/var/log/forensics`, and
 `/opt/forensics/quantum-keys`. Permitted to:
 
 - Run any forensic tool installed in the container.
-- Use `sudo` for the specific apt/pip commands listed in
-  [`config/sudoers.d-sherlock`](../config/sudoers.d-sherlock).
+- Use `sudo` only for the root-owned, input-validating helper specified in
+  [`config/sudoers/sherlock`](config/sudoers/sherlock). It allows a fixed APT
+  package allowlist, APT metadata refresh, and setting the append-only bit on
+  the canonical audit log. It rejects APT options, local package paths,
+  repository/key changes, arbitrary file paths, and shell commands.
 - Append to the audit log.
-- Authenticate to `quantum-root` to obtain a privileged shell (when the
-  PQC keypair has been generated and the passphrase is known).
+- The `quantum-root` flow exists but currently fails closed because its sudo
+  handoff is not implemented and validated; do not rely on it for escalation.
 
 Explicitly **not** permitted:
 
-- `sudo bash`, `sudo su`, `sudo -i`, `sudo -s`, or any other path to a
-  generic root shell. The sudoers policy is whitelist-only with explicit
-  argument patterns.
+- Direct root-shell escalation (`sudo bash`, `sudo su`, `sudo -i`, `sudo -s`)
+  is not granted by sudoers. The only sudo entry invokes the fixed helper; its
+  allowlist and image behavior still require automated build and runtime
+  validation before this can be treated as a verified boundary.
 - Editing `/etc/passwd`, `/etc/shadow`, or the sudoers files.
 - Generic `chattr` on arbitrary paths.
 
 ### `root` — locked
 
-The container's `root` account is **password-locked** (`passwd -l`). It is
-reachable only via:
+The container's `root` account is **password-locked** (`passwd -l`), and the
+Dockerfile sets `USER sherlock` as the default runtime identity. The entrypoint
+supports rootless initialization, and bind-mounted directories must exist and
+be writable by the configured non-root UID. A host operator can still start a
+separate process as root through the Docker daemon. The `quantum-root`
+escalation flow remains fail-closed because its sudo handoff is not implemented
+and validated.
 
-1. The Docker daemon (`docker exec -u root` from the host).
-2. `quantum-root` (after a successful ML-DSA-65 challenge).
-
-There is no in-container path from `sherlock` to `root` without PQC
-authentication or daemon-level access.
+The intended policy keeps arbitrary in-container root shells unavailable to
+`sherlock`; the helper still permits a bounded set of package maintenance
+commands as root. This boundary must be confirmed by automated build and
+regression tests before release.
 
 ## Tamper-evident vs tamper-proof
 
@@ -82,12 +90,12 @@ upload to any of the above.
 
 ## Privilege model details
 
-The runtime container runs with:
+The runtime container is configured with:
 
 - `cap_drop: [ALL]`
 - `cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID, NET_RAW,
   NET_ADMIN, SYS_PTRACE, LINUX_IMMUTABLE]`
-- `security_opt: [no-new-privileges:true]`
+- `no-new-privileges` is **not enabled** in the current Compose file.
 
 `privileged: true` is **off by default**. Enable it only if you need to
 mount disk images via loop devices for live analysis (e.g., for

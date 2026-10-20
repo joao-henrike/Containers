@@ -103,6 +103,65 @@ def test_module_manager_unknown_module_raises(tmp_audit_env):
         mgr.install("does-not-exist", dry_run=True)
 
 
+def test_failed_remove_preserves_manifest(tmp_audit_env, monkeypatch):
+    import forensics.modules.manager as manager_module
+    from forensics.modules.manager import ModuleManager
+    from forensics.modules.registry import Registry
+
+    repo = Path(__file__).resolve().parent.parent
+    reg = Registry.load(repo / "modules" / "registry.json")
+    mgr = ModuleManager(registry=reg)
+    manifest = mgr.installed_dir / "memory-forensics.json"
+    manifest.write_text('{"submodules":{"volatility":{"status":"installed"}}}', encoding="utf-8")
+
+    monkeypatch.setitem(
+        manager_module.REMOVERS["memory-forensics"],
+        "volatility",
+        [["/fake/failing-removal"]],
+    )
+
+    class FailingRunner:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def run(self, cmd, *, ignore_failure=False):
+            assert ignore_failure is False
+            raise RuntimeError("simulated removal failure")
+
+    monkeypatch.setattr(manager_module, "CommandRunner", FailingRunner)
+    result = mgr.remove("memory-forensics")
+
+    assert result.failure_count == 1
+    assert manifest.exists()
+
+
+def test_non_removable_submodule_does_not_clear_manifest(tmp_audit_env, monkeypatch):
+    import forensics.modules.manager as manager_module
+    from forensics.modules.manager import ModuleManager
+    from forensics.modules.registry import Registry
+
+    repo = Path(__file__).resolve().parent.parent
+    reg = Registry.load(repo / "modules" / "registry.json")
+    mgr = ModuleManager(registry=reg)
+    manifest = mgr.installed_dir / "memory-forensics.json"
+    manifest.write_text('{"submodules":{"volatility":{"status":"installed"}}}', encoding="utf-8")
+
+    monkeypatch.setitem(manager_module.REMOVERS["memory-forensics"], "volatility", [])
+
+    class NoopRunner:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def run(self, cmd, *, ignore_failure=False):
+            return 0
+
+    monkeypatch.setattr(manager_module, "CommandRunner", NoopRunner)
+    result = mgr.remove("memory-forensics")
+
+    assert result.submodules[0].status == "skipped"
+    assert manifest.exists()
+
+
 def test_chain_logger_noise_filter():
     from forensics.chain.logger import _is_noisy
 
@@ -115,6 +174,21 @@ def test_chain_logger_noise_filter():
     assert not _is_noisy("openssl x509 -in cert.pem -text")
     # cat is never noisy (used for evidence)
     assert not _is_noisy("cat /evidence/file.txt")
+
+
+def test_command_runner_enforces_timeout_without_output(tmp_path):
+    from forensics.modules.installers import CommandRunner
+
+    runner = CommandRunner(tmp_path / "installer.log", timeout=0.1)
+    with pytest.raises(RuntimeError, match="timeout"):
+        runner.run(["python3", "-c", "import time; time.sleep(3)"])
+
+
+def test_keygen_rejects_short_programmatic_passphrase(tmp_audit_env, tmp_path):
+    from forensics.quantum.keygen import generate
+
+    with pytest.raises(ValueError, match="at least 12 characters"):
+        generate(tmp_path / "keys", "short")
 
 
 def test_quantum_keygen_round_trip(tmp_audit_env):

@@ -112,6 +112,8 @@ def generate(out_dir: Path, passphrase: str) -> tuple[Path, Path]:
 
     Returns ``(encrypted_private_path, public_path)``.
     """
+    if len(passphrase) < 12:
+        raise ValueError("passphrase must be at least 12 characters")
     if not HAVE_OQS:
         raise RuntimeError(
             "liboqs-python is not installed. Build the container image, "

@@ -18,6 +18,7 @@ services:
       dockerfile: Dockerfile
       args:
         UBUNTU_VERSION: "22.04"
+        SHERLOCK_UID: "${HOST_UID:-1000}"
     image: forensics-professional:3.0.0
     container_name: forensics-workstation
     hostname: forensics-lab
@@ -33,10 +34,10 @@ services:
     cap_drop:
       - ALL
     cap_add:
-      - CHOWN              # entrypoint fixes mounted-volume ownership
+      - CHOWN              # used only when an operator explicitly starts as root
       - DAC_OVERRIDE       # read evidence regardless of user perms
       - FOWNER             # chmod on owned files
-      - SETGID             # gosu drops privilege; sudoers escalates apt/pip
+      - SETGID             # gosu drops privilege; sudo invokes the narrow helper
       - SETUID
       - NET_RAW            # tcpdump / packet capture
       - NET_ADMIN          # interface configuration
@@ -45,17 +46,17 @@ services:
 
     # ── Why no `no-new-privileges: true` ────────────────────────────────────
     # NB: `no-new-privileges` (PR_SET_NO_NEW_PRIVS) blocks setuid binaries from
-    # escalating, which DEFEATS sudo. Sherlock relies on a tightly-scoped sudoers
-    # fragment (config/sudoers/sherlock) to install forensic packages at runtime
-    # via `forensics-modules install <name>`. Setting no-new-privileges would
-    # break every module installer with "sudo: effective uid is not 0".
+    # escalating, which DEFEATS sudo. The only sudo command is the root-owned,
+    # validating helper (config/forensics-privileged) for allowlisted APT
+    # packages and the fixed audit-log append-only flag. Python tools install
+    # into a sherlock-owned virtualenv and do not use sudo.
     #
-    # Defence-in-depth here is the *sudoers allowlist*, not no-new-privileges:
-    #   - shell escalation (sudo bash / sudo su / sudo -i) → DENIED
-    #   - editing /etc/passwd, /etc/shadow, sudoers          → DENIED
-    #   - chattr / chmod on arbitrary paths                  → DENIED
-    #   - generic command execution                          → DENIED
-    # See config/sudoers/sherlock and SECURITY.md for the threat model.
+    # The defence-in-depth is the root-owned argument-validating helper in
+    # config/forensics-privileged. It accepts only fixed package names and one
+    # fixed audit-log attribute operation; it does not edit APT sources, accept
+    # shell commands, or permit arbitrary file placement. Build/runtime
+    # validation is required before treating this boundary as verified.
+    # See SECURITY.md for the remaining limitations.
 
     # ── Resources (override per host) ────────────────────────────────────────
     # Compose v2 honours these directly; no `deploy:` block needed.
@@ -70,8 +71,6 @@ services:
     environment:
       TZ: UTC
       FORENSICS_USER: sherlock
-      FORENSICS_HOST_UID: "${HOST_UID:-1000}"
-      FORENSICS_HOST_GID: "${HOST_GID:-1000}"
 
     # ── Volumes ─────────────────────────────────────────────────────────────
     volumes:
@@ -79,27 +78,37 @@ services:
       - type: bind
         source: ./evidence
         target: /evidence
+        bind:
+          create_host_path: false
         read_only: true
 
       # Working directory for the analyst
       - type: bind
         source: ./cases
         target: /cases
+        bind:
+          create_host_path: false
 
       # Audit logs (persisted across container restarts)
       - type: bind
         source: ./logs
         target: /var/log/forensics
+        bind:
+          create_host_path: false
 
       # Cryptographic keys (Ed25519, GPG, optional ML-DSA-65)
       - type: bind
         source: ./keys
         target: /opt/forensics/quantum-keys
+        bind:
+          create_host_path: false
 
       # Generated reports
       - type: bind
         source: ./reports
         target: /reports
+        bind:
+          create_host_path: false
 
       # User configuration overrides — only the public config; sudoers fragment
       # is baked into the image at build time, NOT bind-mounted.
@@ -107,6 +116,8 @@ services:
         source: ./config/config.yaml
         target: /etc/forensics/config.yaml
         read_only: true
+        bind:
+          create_host_path: false
 
     # ── Healthcheck (defined in Dockerfile) is honoured automatically ───────
 

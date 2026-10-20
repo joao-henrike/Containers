@@ -3,8 +3,8 @@
 # generate-quantum-keys.sh — convenience wrapper for forensics.quantum.keygen
 # ==============================================================================
 # Usage:
-#   sudo forensics-health      # ensure liboqs is present
-#   /opt/forensics/bin/generate-quantum-keys.sh
+#   forensics-health            # ensure liboqs is present
+#   /opt/forensics/bin/generate-quantum-keys.sh (run as sherlock)
 #
 # Output:
 #   /opt/forensics/quantum-keys/dilithium_private.key.enc

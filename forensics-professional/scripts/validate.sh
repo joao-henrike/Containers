@@ -65,11 +65,17 @@ else
     bad "/etc/sudoers.d/sherlock-forensics missing"
 fi
 
-# Sherlock must NOT be able to get a generic shell via sudo.
-if sudo -ln bash 2>/dev/null | grep -q "^/bin/bash"; then
-    bad "sudo grants bash — sudoers too permissive"
+# The validating helper should be the only NOPASSWD command and direct shell
+# execution must actually be denied (not just absent from a listing).
+if sudo -n -l 2>/dev/null | grep -Fq "/usr/local/sbin/forensics-privileged"; then
+    ok "restricted privilege helper is listed"
 else
-    ok "sudo does not grant bash"
+    bad "restricted privilege helper is not listed"
+fi
+if sudo -n /bin/bash -c 'exit 0' >/dev/null 2>&1; then
+    bad "sudo unexpectedly grants a root shell"
+else
+    ok "direct root-shell execution is denied"
 fi
 
 # ── Audit system ────────────────────────────────────────────────────────────

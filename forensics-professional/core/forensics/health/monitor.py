@@ -220,7 +220,7 @@ def probe_tools() -> Section:
         ("git",      "git"),
         ("curl",     "curl"),
         ("jq",       "jq"),
-        ("sudo",     "sudo (restricted by /etc/sudoers.d/sherlock-forensics)"),
+        ("sudo",     "sudo (fixed root-owned helper only)"),
         ("gosu",     "gosu (privilege drop)"),
     ]
     for cmd, label in expected:

@@ -17,7 +17,7 @@
 ║   Audit log  : Ed25519-signed, hash-chained, tamper-evident                 ║
 ║   Optional   : ML-DSA-65 (Dilithium) for post-quantum auth — opt-in         ║
 ║   Modules    : 14 categories  ·  104 tools  ·  ≈ 8.3 GB if all installed    ║
-║   User       : sherlock  (root locked; sudo restricted to apt/pip only)     ║
+║   User       : sherlock  (root locked; sudo uses fixed package helper)     ║
 ║   Evidence   : mounted read-only                                            ║
 ║                                                                              ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
@@ -32,7 +32,7 @@
 ║   forensics-audit verify                Verify audit trail integrity        ║
 ║   forensics-audit show --limit 50       Show recent audit entries           ║
 ║   forensics-health                      System health & resource check      ║
-║   quantum-root                          Privileged shell (PQC challenge)    ║
+║   quantum-root                          ML-DSA auth witness (no shell)      ║
 ║                                                                              ║
 ║   First-time setup                                                           ║
 ║     1. /opt/forensics/bin/generate-quantum-keys.sh   (interactive)          ║

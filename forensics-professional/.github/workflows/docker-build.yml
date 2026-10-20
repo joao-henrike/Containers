@@ -86,6 +86,13 @@ jobs:
         id: ver
         run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
 
+      - name: Prepare non-root bind mounts
+        run: |
+          export HOST_UID="$(id -u)"
+          echo "HOST_UID=$HOST_UID" >> "$GITHUB_ENV"
+          mkdir -p evidence cases logs keys reports
+          chmod 0750 keys
+
       - name: Build image
         uses: docker/build-push-action@v6
         with:
@@ -93,6 +100,8 @@ jobs:
           file: forensics-professional/Dockerfile
           load: true
           tags: ${{ env.IMAGE_NAME }}:${{ steps.ver.outputs.version }}
+          build-args: |
+            SHERLOCK_UID=${{ env.HOST_UID }}
           cache-from: type=gha
           cache-to:   type=gha,mode=max
 
@@ -111,17 +120,17 @@ jobs:
 
       - name: Run smoke tests
         run: |
-          docker compose exec -T forensics \
+          docker compose exec -T --user sherlock forensics \
             /opt/forensics/bin/validate.sh
 
       - name: Audit log integrity
         run: |
-          docker compose exec -T forensics \
+          docker compose exec -T --user sherlock forensics \
             forensics-audit verify
 
       - name: Module list
         run: |
-          docker compose exec -T forensics \
+          docker compose exec -T --user sherlock forensics \
             forensics-modules list
 
       - name: Stop container

@@ -27,9 +27,11 @@ approach:
   (binary on PATH, Python module importable, file on disk).
 - **Audited operations.** Every install/remove and every shell command run
   by the analyst is captured in a signed, hash-chained log.
-- **Honest privilege model.** `sherlock` is the analyst account; sudo is
-  restricted to the specific apt/pip commands installers need. There is no
-  shell-via-sudo path.
+- **Restricted privilege model.** The image defaults to `sherlock`. Sudo
+  grants access only to a root-owned helper that validates a fixed APT package
+  allowlist and one fixed audit-log append-only operation. Python tools install
+  into a sherlock-owned virtualenv; no runtime APT source/key edits, `pip` as
+  root, arbitrary file placement as root, or root shell are allowed.
 
 ## Quickstart
 
@@ -37,12 +39,16 @@ approach:
 git clone https://github.com/joao-henrike/Containers.git
 cd Containers/forensics-professional
 
-# Build & start
+# Prepare bind mounts as the current host user (do not run this as root)
+export HOST_UID="$(id -u)"
+mkdir -p evidence cases logs keys reports
+
+# Build with sherlock mapped to your non-root host UID, then start
 docker compose build
 docker compose up -d
 
 # Drop into the analyst shell
-docker compose exec forensics bash
+docker compose exec --user sherlock forensics bash
 
 # Inside the container
 forensics-modules list
@@ -93,7 +99,7 @@ forensics-modules install memory-forensics --dry-run
 forensics-modules repair malware-analysis
 
 # Tear down a module (apt remove + pip uninstall where defined)
-forensics-modules remove ngrep
+forensics-modules remove network-forensics
 
 # Audit log
 forensics-audit verify
@@ -108,25 +114,13 @@ forensics-health quick-check         # used by Docker HEALTHCHECK
 
 ## Privileged operations (post-quantum auth)
 
-Some operations need genuine root inside the container (kernel module
-load, raw device access). To gate this behind a strong authenticator:
-
-```bash
-# One-time setup: generate the ML-DSA-65 keypair (asks for a passphrase)
-sudo /opt/forensics/bin/generate-quantum-keys.sh
-
-# Authenticate and obtain a root shell
-quantum-root
-```
-
-`quantum-root` runs a real challenge-response with ML-DSA-65 (NIST FIPS 204).
-**There is no fallback success path** — if the keys are missing or the
-passphrase is wrong, authentication fails. See
-[`docs/PRIVILEGED_MODE.md`](docs/PRIVILEGED_MODE.md).
-
-If you don't need PQC authentication, ordinary `sudo apt-get install <pkg>`
-also works for whitelisted commands; you don't need `quantum-root` to
-install modules.
+The repository includes a `quantum-root` challenge-response flow using ML-DSA-65,
+but the final sudo handoff is not implemented and validated; it fails closed
+and must not be considered a working root shell. Key generation and everyday
+analysis run as `sherlock` without sudo. The only sudo permission is the
+root-owned validating helper used for allowlisted package operations and the
+fixed audit-log append-only bit. See [`docs/PRIVILEGED_MODE.md`](docs/PRIVILEGED_MODE.md)
+for the intended design and remaining limitations.
 
 ## Configuration
 
@@ -145,14 +139,15 @@ or by setting environment variables:
 
 ```
 forensics-professional/
-├── Dockerfile                      # multi-stage, gosu-verified, USER sherlock
+├── Dockerfile                      # multi-stage build, gosu-based entrypoint drop
 ├── docker-compose.yml              # cap_drop ALL + cap_add specifics
 ├── docker-entrypoint.sh            # tini-wrapped, gosu-based privilege drop
 ├── VERSION                         # single source of truth
 ├── requirements.txt                # pinned Python deps
 ├── config/
 │   ├── config.yaml                 # default deployment config
-│   └── sudoers.d-sherlock          # restricted sudo policy
+│   ├── sudoers/sherlock            # single root-helper rule
+│   └── forensics-privileged        # input-validating root helper
 ├── core/
 │   ├── audit-system/               # forensics-audit, quantum-root, hooks
 │   ├── module-manager/             # forensics-modules

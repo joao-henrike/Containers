@@ -9,8 +9,8 @@
 # Design notes
 # ------------
 # • Multi-stage: builder compiles liboqs (post-quantum), runtime stays slim.
-# • Honest privilege model: sherlock runs everything; sudo restricted to
-#   apt-get/pip via /etc/sudoers.d/sherlock-forensics (no shell escalation).
+# • Restricted privilege model: sherlock is the default user; sudo invokes
+#   only the root-owned, validating package/audit helper (no root pip or shell).
 # • gosu is installed and verified — the entrypoint relies on it.
 # • USER sherlock is the default; root is disabled (passwd -l).
 # • HEALTHCHECK exposes liveness to docker/compose orchestration.
@@ -28,6 +28,7 @@
 
 ARG UBUNTU_VERSION=22.04
 ARG GOSU_VERSION=1.17
+ARG SHERLOCK_UID=1000
 
 # ──────────────────────────────────────────────────────────────────────────────
 # STAGE 1 — Post-Quantum Cryptography builder (liboqs)
@@ -198,18 +199,26 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 # • forensics-ro (gid 1001)    — read-only group for evidence access
 # • Root password disabled. Sherlock has no password (set via `passwd -d`),
 #   sudoers rules below explicitly restrict what it may run with privilege.
-RUN groupadd -r -g 1000 sherlock \
- && useradd  -r -g sherlock -u 1000 -m -s /bin/bash sherlock \
- && passwd   -d sherlock \
- && groupadd -r -g 1001 forensics-ro \
- && usermod  -aG forensics-ro sherlock \
- && passwd   -l root
+RUN set -eux; \
+    case "${SHERLOCK_UID}" in ''|*[!0-9]*|0) echo "SHERLOCK_UID must be a positive integer" >&2; exit 1;; esac; \
+    if getent passwd "${SHERLOCK_UID}" >/dev/null; then \
+        echo "SHERLOCK_UID collides with an existing image account" >&2; exit 1; \
+    fi; \
+    groupadd -r -g 1000 sherlock; \
+    useradd -r -u "${SHERLOCK_UID}" -g sherlock -m -s /bin/bash sherlock; \
+    passwd -d sherlock; \
+    groupadd -r forensics-ro; \
+    usermod -aG forensics-ro sherlock; \
+    passwd -l root
 
 # Sudoers rule — explicit commands only, no shell escalation.
 # Note: sudoers fragment lives in config/sudoers/sherlock (NOT inside config/
 # top-level, to avoid collision with the runtime /etc/forensics bind mount).
 COPY config/sudoers/sherlock /etc/sudoers.d/sherlock-forensics
-RUN chmod 0440 /etc/sudoers.d/sherlock-forensics \
+COPY config/forensics-privileged /usr/local/sbin/forensics-privileged
+RUN chown root:root /etc/sudoers.d/sherlock-forensics /usr/local/sbin/forensics-privileged \
+ && chmod 0440 /etc/sudoers.d/sherlock-forensics \
+ && chmod 0755 /usr/local/sbin/forensics-privileged \
  && visudo -cf /etc/sudoers.d/sherlock-forensics
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -233,6 +242,7 @@ RUN mkdir -p \
         /opt/forensics/modules/manifests \
         /opt/forensics/quantum-keys \
         /opt/forensics/chain-logger \
+ && python3 -m venv --system-site-packages /opt/forensics/venv \
  && chown -R sherlock:sherlock \
         /cases \
         /reports \
@@ -265,7 +275,8 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
 # ──────────────────────────────────────────────────────────────────────────────
 # 8. Environment
 # ──────────────────────────────────────────────────────────────────────────────
-ENV FORENSICS_HOME="/opt/forensics" \
+ENV HOME="/home/sherlock" \
+    FORENSICS_HOME="/opt/forensics" \
     FORENSICS_LOGS="/var/log/forensics" \
     FORENSICS_MODULES="/opt/forensics/modules" \
     FORENSICS_KEYS="/opt/forensics/quantum-keys" \
@@ -273,7 +284,7 @@ ENV FORENSICS_HOME="/opt/forensics" \
     PYTHONPATH="/opt/forensics/core" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PATH="/opt/forensics/bin:/opt/forensics/core/module-manager:/opt/forensics/core/audit-system:/usr/local/bin:${PATH}" \
+    PATH="/opt/forensics/venv/bin:/opt/forensics/bin:/opt/forensics/core/module-manager:/opt/forensics/core/audit-system:/usr/local/bin:${PATH}" \
     TZ=UTC \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
@@ -287,7 +298,8 @@ HEALTHCHECK --interval=60s --timeout=10s --start-period=20s --retries=3 \
 # ──────────────────────────────────────────────────────────────────────────────
 # 10. Entrypoint
 # ──────────────────────────────────────────────────────────────────────────────
-# tini is PID 1 → forwards signals & reaps zombies.
-# docker-entrypoint.sh runs as root (privileged init), then drops to sherlock.
+# The init process and default command run as the unprivileged analyst.
+# Root operations, where needed, are confined to the validated helper above.
+USER sherlock
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/docker-entrypoint.sh"]
 CMD ["bash"]

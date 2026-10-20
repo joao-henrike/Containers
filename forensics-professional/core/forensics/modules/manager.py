@@ -312,7 +312,7 @@ class ModuleManager:
 
             try:
                 for c in cmds:
-                    runner.run(c, ignore_failure=True)
+                    runner.run(c)
                 result.submodules.append(SubmoduleResult(
                     name=sm_name, status="removed",
                 ))
@@ -323,13 +323,24 @@ class ModuleManager:
                 ))
                 print(f"  {RED}✗{NC}  {sm_name}: {exc}")
 
-        # Clear the manifest if every entry that had a remover succeeded.
-        all_done = all(s.status in ("removed", "skipped") for s in result.submodules)
+        # Keep the manifest until every tracked submodule was removed; a
+        # skipped or failed remover means the manifest is still useful state.
+        all_done = bool(result.submodules) and all(
+            s.status == "removed" for s in result.submodules
+        )
         if all_done and not dry_run:
             mp = self.installed_dir / f"{name}.json"
             if mp.exists():
                 mp.unlink()
             audit_log("module_removed", {"module": name})
+        elif not dry_run:
+            audit_log("module_remove_incomplete", {
+                "module": name,
+                "submodules": [
+                    {"name": s.name, "status": s.status, "detail": s.detail}
+                    for s in result.submodules
+                ],
+            })
 
         return result
 

@@ -25,6 +25,7 @@ re-raises the underlying exception unless ``strict=False``.
 from __future__ import annotations
 
 import base64
+import fcntl
 import hashlib
 import json
 import logging
@@ -143,30 +144,41 @@ class AuditLogger:
             user = os.environ.get("USER") or os.environ.get("LOGNAME") or "unknown"
 
         with self._lock:
-            prev_hash = self._read_last_hash()
-            seq = self._read_last_seq() + 1
+            # Serialize the complete read-sign-append transaction across
+            # processes, not just across threads in this Python process.
+            lock_path = self.log_path.with_name(self.log_path.name + ".lock")
+            lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                prev_hash = self._read_last_hash()
+                seq = self._read_last_seq() + 1
 
-            entry = AuditEntry(
-                seq=seq,
-                event_id=str(uuid.uuid4()),
-                timestamp=_utcnow(),
-                event_type=event_type,
-                user=user,
-                container_id=_container_id(),
-                details=details,
-                prev_hash=prev_hash,
-            )
-            entry.hash = self._compute_hash(entry)
+                entry = AuditEntry(
+                    seq=seq,
+                    event_id=str(uuid.uuid4()),
+                    timestamp=_utcnow(),
+                    event_type=event_type,
+                    user=user,
+                    container_id=_container_id(),
+                    details=details,
+                    prev_hash=prev_hash,
+                )
+                entry.hash = self._compute_hash(entry)
 
-            sign_data = self._canonical_json(
-                {k: v for k, v in entry.to_dict().items() if k != "signatures"}
-            )
-            entry.signatures = {
-                "ed25519": self._sign_ed25519(sign_data),
-                "gpg":     self._sign_gpg(sign_data),
-            }
+                sign_data = self._canonical_json(
+                    {k: v for k, v in entry.to_dict().items() if k != "signatures"}
+                )
+                entry.signatures = {
+                    "ed25519": self._sign_ed25519(sign_data),
+                    "gpg":     self._sign_gpg(sign_data),
+                }
 
-            self._append(entry)
+                self._append(entry)
+            finally:
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                finally:
+                    os.close(lock_fd)
         return entry
 
     def verify(self) -> dict[str, Any]:
@@ -200,8 +212,28 @@ class AuditLogger:
 
         result["total_entries"] = len(entries)
         verifier = self._ed25519_verifier()
+        if verifier is None:
+            result["status"] = "ERROR"
+            result["error"] = (
+                "Ed25519 public key unavailable or invalid; "
+                "cannot verify audit signatures"
+            )
+            return result
 
         for i, entry in enumerate(entries):
+            if i == 0:
+                if entry.get("seq") != 1:
+                    result["sequence_gaps"].append({
+                        "expected": 1,
+                        "got": entry.get("seq"),
+                    })
+                    result["status"] = "INVALID"
+                if entry.get("prev_hash") != self.GENESIS_HASH:
+                    result["broken_links"].append({
+                        "seq": entry.get("seq"),
+                        "reason": "invalid_genesis_hash",
+                    })
+                    result["status"] = "INVALID"
             stored_hash = entry.get("hash", "")
             recomputed = self._compute_hash_from_dict(entry)
             if stored_hash != recomputed:
@@ -228,15 +260,15 @@ class AuditLogger:
                         "expected": expected_seq,
                         "got":      entry.get("seq"),
                     })
-
-            if verifier is not None:
-                ok = self._verify_ed25519(verifier, entry)
-                if not ok:
-                    result["signature_failures"].append({
-                        "seq": entry.get("seq"),
-                        "reason": "ed25519_invalid",
-                    })
                     result["status"] = "INVALID"
+
+            ok = self._verify_ed25519(verifier, entry)
+            if not ok:
+                result["signature_failures"].append({
+                    "seq": entry.get("seq"),
+                    "reason": "ed25519_invalid",
+                })
+                result["status"] = "INVALID"
 
         return result
 
@@ -340,8 +372,11 @@ class AuditLogger:
                         yield json.loads(raw)
                     except json.JSONDecodeError as exc:
                         self._record_error(
-                            f"corrupt audit line skipped: {exc}: {raw[:120]}"
+                            f"corrupt audit line: {exc}: {raw[:120]}"
                         )
+                        # Verification/export must never silently validate an
+                        # incomplete chain after omitting a corrupted record.
+                        raise
         except FileNotFoundError:
             return
 
@@ -429,7 +464,7 @@ class AuditLogger:
             )
             pub_path = self.keys_dir / "audit_ed25519.pub"
             return load_pem_public_key(pub_path.read_bytes())
-        except (FileNotFoundError, ValueError):
+        except (OSError, TypeError, ValueError):
             return None
 
     def _sign_ed25519(self, data: str) -> str:
@@ -479,8 +514,8 @@ class AuditLogger:
                 check=False,
             )
             if result.returncode == 0:
-                # Truncate ASCII-armoured signature to keep entries small.
-                return result.stdout.decode("utf-8", errors="replace")[:512]
+                # Preserve the full detached signature so it remains verifiable.
+                return result.stdout.decode("utf-8", errors="strict")
             return "unavailable"
         except (OSError, subprocess.TimeoutExpired) as exc:
             self._record_error(f"gpg unavailable: {exc}")

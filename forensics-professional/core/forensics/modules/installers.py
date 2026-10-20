@@ -13,8 +13,11 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
 import shlex
+import signal
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Callable, Iterator
@@ -63,18 +66,27 @@ class CommandRunner:
     def apt_install(self, *packages: str) -> None:
         if not packages:
             return
-        self.run(["sudo", "DEBIAN_FRONTEND=noninteractive",
-                  "apt-get", "install", "-y", *packages],
-                 ignore_failure=False)
+        self.run(
+            ["sudo", "/usr/local/sbin/forensics-privileged", "apt-install", *packages],
+            ignore_failure=False,
+        )
 
     def apt_update(self) -> None:
-        self.run(["sudo", "apt-get", "update"], ignore_failure=True)
+        self.run(
+            ["sudo", "/usr/local/sbin/forensics-privileged", "apt-update"],
+            ignore_failure=True,
+        )
 
     def pip_install(self, *packages: str) -> None:
         if not packages:
             return
-        cmd = ["sudo", "pip3", "install", "--break-system-packages",
-               "--no-cache-dir", *packages]
+        # Analyst-supplied tools belong in a dedicated, sherlock-owned venv.
+        # Python package installation must never be delegated to root/pip.
+        cmd = [
+            "/opt/forensics/venv/bin/python",
+            "-m", "pip", "install", "--disable-pip-version-check",
+            "--no-cache-dir", *packages,
+        ]
         self.run(cmd, ignore_failure=False)
 
     def shell(self, cmdline: str, *, ignore_failure: bool = False) -> None:
@@ -98,24 +110,71 @@ class CommandRunner:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
+            start_new_session=True,
         )
         assert proc.stdout is not None
 
-        deadline = time.monotonic() + self.timeout
-        try:
-            for raw in proc.stdout:
-                self._log(raw.rstrip())
-                if time.monotonic() > deadline:
-                    proc.terminate()
-                    raise subprocess.TimeoutExpired(cmd=cmd, timeout=self.timeout)
-        finally:
-            try:
-                rc = proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                rc = proc.wait()
+        # Read output separately so a silent child or a stream without newlines
+        # cannot block enforcement of the configured timeout.
+        output: queue.Queue[str | None] = queue.Queue()
 
+        def pump_output() -> None:
+            try:
+                for raw in proc.stdout:
+                    output.put(raw)
+            finally:
+                output.put(None)
+
+        reader = threading.Thread(target=pump_output, daemon=True)
+        reader.start()
+        deadline = time.monotonic() + self.timeout
+        timed_out = False
+
+        rc: int | None = None
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                break
+            try:
+                raw = output.get(timeout=remaining)
+            except queue.Empty:
+                timed_out = True
+                break
+            if raw is None:
+                # EOF does not prove the child exited: a subprocess may close
+                # stdout and continue doing work. Bound wait() by the deadline.
+                try:
+                    rc = proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                break
+            self._log(raw.rstrip())
+
+        if timed_out:
+            # Installers can spawn nested shells, curl, compilers, and package
+            # managers; terminate the whole process group on timeout.
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                proc.wait()
+            reader.join(timeout=1)
+            raise subprocess.TimeoutExpired(cmd=cmd, timeout=self.timeout)
+
+        if rc is None:
+            rc = proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+        reader.join(timeout=1)
         if rc != 0 and not ignore_failure:
             raise RuntimeError(f"command exited {rc}: {cmd}")
         return rc
@@ -135,29 +194,44 @@ def cloud_aws(r: CommandRunner) -> None:
         "curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip "
         "-o /tmp/awscliv2.zip && "
         "unzip -qo /tmp/awscliv2.zip -d /tmp && "
-        "sudo /tmp/aws/install --update && "
+        "if /opt/forensics/bin/aws --version >/dev/null 2>&1; then "
+        "/tmp/aws/install --install-dir /opt/forensics/aws-cli "
+        "--bin-dir /opt/forensics/bin --update; else "
+        "/tmp/aws/install --install-dir /opt/forensics/aws-cli "
+        "--bin-dir /opt/forensics/bin; fi && "
         "rm -rf /tmp/aws /tmp/awscliv2.zip",
     )
     r.pip_install("boto3", "s3transfer")
 
 
 def cloud_azure(r: CommandRunner) -> None:
-    r.shell("curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash")
-    r.pip_install("azure-mgmt-compute", "azure-mgmt-storage", "azure-identity")
+    # Keep Python SDKs and the Azure CLI inside the analyst-owned virtualenv.
+    # No runtime repository/key changes are granted to the analyst account.
+    r.pip_install(
+        "azure-cli",
+        "azure-mgmt-compute",
+        "azure-mgmt-storage",
+        "azure-identity",
+    )
 
 
 def cloud_gcp(r: CommandRunner) -> None:
+    # Install the official tarball into the sherlock-owned tools directory.
+    # This avoids creating privileged APT sources or trust keys at runtime.
     r.shell(
-        'echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] '
-        'https://packages.cloud.google.com/apt cloud-sdk main" | '
-        'sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list',
+        "rm -rf /opt/forensics/tools/google-cloud-sdk && "
+        "curl -fsSL "
+        "https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/"
+        "google-cloud-cli-linux-x86_64.tar.gz "
+        "-o /tmp/google-cloud-cli.tar.gz && "
+        "tar -xzf /tmp/google-cloud-cli.tar.gz -C /opt/forensics/tools && "
+        "/opt/forensics/tools/google-cloud-sdk/install.sh --quiet "
+        "--path-update=false --command-completion=false --usage-reporting=false && "
+        "ln -sf /opt/forensics/tools/google-cloud-sdk/bin/gcloud /opt/forensics/bin/gcloud && "
+        "ln -sf /opt/forensics/tools/google-cloud-sdk/bin/gsutil /opt/forensics/bin/gsutil && "
+        "ln -sf /opt/forensics/tools/google-cloud-sdk/bin/bq /opt/forensics/bin/bq && "
+        "rm -f /tmp/google-cloud-cli.tar.gz",
     )
-    r.shell(
-        "curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | "
-        "sudo gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg",
-    )
-    r.apt_update()
-    r.apt_install("google-cloud-cli")
 
 
 def cloud_generic(r: CommandRunner) -> None:
@@ -188,7 +262,7 @@ def memory_avml(r: CommandRunner) -> None:
         "                 if a['name'].endswith('avml')), ''))\") && "
         "[ -n \"$URL\" ] && "
         "  curl -fsSL \"$URL\" -o /tmp/avml && "
-        "  sudo install -o root -g root -m 0755 /tmp/avml /usr/local/bin/avml && "
+        "  install -m 0755 /tmp/avml /opt/forensics/bin/avml && "
         "  rm -f /tmp/avml",
     )
 
@@ -212,24 +286,15 @@ def disk_scalpel(r: CommandRunner) -> None:
 
 # ── network-forensics ────────────────────────────────────────────────────────
 def network_wireshark(r: CommandRunner) -> None:
-    r.shell(
-        "echo 'wireshark-common wireshark-common/install-setuid boolean false' "
-        "| sudo debconf-set-selections",
-    )
+    # APT is run non-interactively by the root-owned package helper. The
+    # analyst is not granted arbitrary debconf commands as root.
     r.apt_install("tshark", "wireshark-common")
 
 
 def network_zeek(r: CommandRunner) -> None:
-    r.shell(
-        "echo 'deb http://download.opensuse.org/repositories/security:/zeek/"
-        "xUbuntu_22.04/ /' | sudo tee /etc/apt/sources.list.d/zeek.list",
-    )
-    r.shell(
-        "curl -fsSL https://download.opensuse.org/repositories/security:/zeek/"
-        "xUbuntu_22.04/Release.key | sudo gpg --dearmor "
-        "-o /etc/apt/trusted.gpg.d/zeek.gpg",
-    )
-    r.apt_update()
+    # Do not import a third-party signing key or repository into the running
+    # image as sherlock. Attempt only repositories baked into the image by the
+    # image maintainer; if Zeek is unavailable there, the install fails closed.
     r.apt_install("zeek")
 
 
@@ -258,8 +323,8 @@ def mobile_backup_extractors(r: CommandRunner) -> None:
         "rm -rf /tmp/abe && "
         "git clone --depth 1 https://github.com/nelenkov/android-backup-extractor /tmp/abe && "
         "cd /tmp/abe && ./gradlew --no-daemon && "
-        "sudo mkdir -p /opt/forensics/tools && "
-        "sudo cp build/libs/abe-all.jar /opt/forensics/tools/abe.jar && "
+        "mkdir -p /opt/forensics/tools && "
+        "cp build/libs/abe-all.jar /opt/forensics/tools/abe.jar && "
         "rm -rf /tmp/abe",
     )
 
@@ -289,32 +354,33 @@ def malware_ghidra(r: CommandRunner) -> None:
         "                 if a['name'].endswith('.zip')), ''))\") && "
         "[ -n \"$URL\" ] && "
         "  curl -fsSL \"$URL\" -o /tmp/ghidra.zip && "
-        "  sudo mkdir -p /opt/forensics/tools && "
-        "  sudo unzip -qo /tmp/ghidra.zip -d /opt/forensics/tools/ && "
+        "  unzip -qo /tmp/ghidra.zip -d /opt/forensics/tools/ && "
         "  rm -f /tmp/ghidra.zip",
     )
 
 
 def malware_clamav(r: CommandRunner) -> None:
     r.apt_install("clamav")
-    r.run(["sudo", "freshclam"], ignore_failure=True)
+    # Refresh is best-effort without broad root permissions; installations can
+    # alternatively be provided with pre-fetched signatures by the operator.
+    r.run(["freshclam"], ignore_failure=True)
 
 
 # ── windows-forensics ────────────────────────────────────────────────────────
 def windows_regripper(r: CommandRunner) -> None:
     r.apt_install("libparse-win32registry-perl")
     r.shell(
-        "sudo mkdir -p /opt/forensics/tools && "
+        "mkdir -p /opt/forensics/tools && "
         "[ -d /opt/forensics/tools/regripper ] || "
-        "  sudo git clone --depth 1 https://github.com/keydet89/RegRipper3.0 "
+        "  git clone --depth 1 https://github.com/keydet89/RegRipper3.0 "
         "  /opt/forensics/tools/regripper",
     )
 
 
 def windows_plaso(r: CommandRunner) -> None:
-    r.run(["sudo", "add-apt-repository", "-y", "ppa:gift/stable"])
-    r.apt_update()
-    r.apt_install("plaso-tools")
+    # Use the Python distribution in the analyst virtualenv rather than adding
+    # a root-trusted third-party PPA at runtime.
+    r.pip_install("plaso")
 
 
 def windows_evtx(r: CommandRunner) -> None:
@@ -348,7 +414,8 @@ def container_docker(r: CommandRunner) -> None:
         "                 if 'linux_amd64' in a['name'] and a['name'].endswith('.tar.gz')), ''))\") && "
         "[ -n \"$URL\" ] && "
         "  curl -fsSL \"$URL\" -o /tmp/dive.tar.gz && "
-        "  sudo tar -xzf /tmp/dive.tar.gz -C /usr/local/bin dive && "
+        "  tar -xzf /tmp/dive.tar.gz -C /opt/forensics/bin dive && "
+        "  chmod 0755 /opt/forensics/bin/dive && "
         "  rm -f /tmp/dive.tar.gz",
     )
 
@@ -358,7 +425,7 @@ def container_kubernetes(r: CommandRunner) -> None:
         "VER=$(curl -fsSL https://dl.k8s.io/release/stable.txt) && "
         "curl -fsSL https://dl.k8s.io/release/${VER}/bin/linux/amd64/kubectl "
         "  -o /tmp/kubectl && "
-        "sudo install -o root -g root -m 0755 /tmp/kubectl /usr/local/bin/kubectl && "
+        "install -m 0755 /tmp/kubectl /opt/forensics/bin/kubectl && "
         "rm -f /tmp/kubectl",
     )
 
@@ -405,9 +472,9 @@ def osint_domain(r: CommandRunner) -> None:
 
 def osint_phone(r: CommandRunner) -> None:
     r.shell(
-        "rm -rf /tmp/phoneinfoga && "
-        "git clone --depth 1 https://github.com/sundowndev/phoneinfoga /tmp/phoneinfoga && "
-        "sudo mv /tmp/phoneinfoga /opt/forensics/tools/phoneinfoga",
+        "rm -rf /opt/forensics/tools/phoneinfoga && "
+        "git clone --depth 1 https://github.com/sundowndev/phoneinfoga "
+        "/opt/forensics/tools/phoneinfoga",
     )
 
 
@@ -439,8 +506,9 @@ def web_subdomain(r: CommandRunner) -> None:
         "                 if 'linux_amd64' in a['name'] and a['name'].endswith('.zip')), ''))\") && "
         "[ -n \"$URL\" ] && "
         "  curl -fsSL \"$URL\" -o /tmp/subfinder.zip && "
+        "  mkdir -p /tmp/subfinder && "
         "  unzip -qo /tmp/subfinder.zip -d /tmp/subfinder && "
-        "  sudo install -o root -g root -m 0755 /tmp/subfinder/subfinder /usr/local/bin/subfinder && "
+        "  install -m 0755 /tmp/subfinder/subfinder /opt/forensics/bin/subfinder && "
         "  rm -rf /tmp/subfinder /tmp/subfinder.zip",
     )
 
@@ -539,16 +607,16 @@ INSTALLERS: dict[str, dict[str, SubmoduleInstaller]] = {
 
 # Removal commands — best-effort. Keys mirror INSTALLERS.
 def _apt_remove(*pkgs: str) -> Iterator[list[str]]:
-    yield ["sudo", "DEBIAN_FRONTEND=noninteractive",
-           "apt-get", "remove", "-y", *pkgs]
+    yield ["sudo", "/usr/local/sbin/forensics-privileged", "apt-remove", *pkgs]
 
 
 def _pip_uninstall(*pkgs: str) -> Iterator[list[str]]:
-    yield ["sudo", "pip3", "uninstall", "-y", *pkgs]
+    yield ["/opt/forensics/venv/bin/python", "-m", "pip", "uninstall", "-y", *pkgs]
 
 
 def _rm_path(path: str) -> Iterator[list[str]]:
-    yield ["sudo", "rm", "-rf", path]
+    # Paths passed here must be within the analyst-owned application tree.
+    yield ["rm", "-rf", path]
 
 
 REMOVERS: dict[str, dict[str, list[list[str]]]] = {
