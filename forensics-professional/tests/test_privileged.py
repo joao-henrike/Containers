@@ -5,6 +5,7 @@ packages or mutate real filesystem flags.
 """
 from __future__ import annotations
 
+import ast
 import runpy
 import stat
 import struct
@@ -160,3 +161,43 @@ def test_audit_append_only_opens_fixed_path_nonblocking_and_sets_only_append(
 def test_unknown_operation_fails_closed(privileged_helper, monkeypatch):
     monkeypatch.setattr(privileged_helper["os"], "geteuid", lambda: 0)
     assert privileged_helper["run"](["run-shell", "id"]) == 2
+
+
+
+def test_package_allowlists_stay_in_sync_with_installers(privileged_helper):
+    """Installing/removing modules must not silently drift from the root helper."""
+    from forensics.modules.installers import REMOVERS
+
+    source = (
+        Path(__file__).resolve().parent.parent
+        / "core"
+        / "forensics"
+        / "modules"
+        / "installers.py"
+    )
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    installer_packages = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "apt_install"
+        ):
+            for arg in node.args:
+                value = ast.literal_eval(arg)
+                assert isinstance(value, str)
+                installer_packages.add(value)
+
+    removal_packages = set()
+    for submodules in REMOVERS.values():
+        for commands in submodules.values():
+            for command in commands:
+                if (
+                    len(command) >= 4
+                    and command[1] == "/usr/local/sbin/forensics-privileged"
+                    and command[2] == "apt-remove"
+                ):
+                    removal_packages.update(command[3:])
+
+    assert installer_packages == privileged_helper["ALLOWED_PACKAGES"]
+    assert removal_packages == privileged_helper["ALLOWED_REMOVE_PACKAGES"]
