@@ -140,7 +140,7 @@ def run(argv: list[str]) -> int:
         # Do not pass a user-writable pathname to a root chattr process: open
         # the fixed path without following symlinks, then mutate only that fd.
         try:
-            fd = os.open(AUDIT_LOG, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            fd = os.open(AUDIT_LOG, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
         except OSError as exc:
             return fail(f"cannot safely open audit log: {exc}", 1)
         try:
