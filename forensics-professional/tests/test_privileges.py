@@ -150,7 +150,6 @@ def test_audit_append_only_rejects_symlinks_and_wrong_owners(monkeypatch):
     assert helper["run"](["audit-append-only"]) == 1
 
 
-
 def test_audit_append_only_rejects_user_supplied_paths(monkeypatch):
     helper = _load_helper()
     _pretend_root(monkeypatch, helper)
