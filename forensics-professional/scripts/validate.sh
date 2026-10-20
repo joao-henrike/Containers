@@ -65,6 +65,18 @@ else
     bad "/etc/sudoers.d/sherlock-forensics missing"
 fi
 
+# Both files are part of the privilege boundary and must remain root-owned.
+if [[ "$(stat -c '%u:%g:%a' /usr/local/sbin/forensics-privileged 2>/dev/null)" == "0:0:755" ]]; then
+    ok "privilege helper is root-owned and not group/world-writable"
+else
+    bad "privilege helper ownership or mode is unsafe"
+fi
+if [[ "$(stat -c '%u:%g:%a' /etc/sudoers.d/sherlock-forensics 2>/dev/null)" == "0:0:440" ]]; then
+    ok "sudoers fragment is root-owned with mode 0440"
+else
+    bad "sudoers ownership or mode is unsafe"
+fi
+
 # The validating helper should be the only NOPASSWD command and direct shell
 # execution must actually be denied (not just absent from a listing).
 if sudo -n -l 2>/dev/null | grep -Fq "/usr/local/sbin/forensics-privileged"; then
@@ -76,6 +88,11 @@ if sudo -n /bin/bash -c 'exit 0' >/dev/null 2>&1; then
     bad "sudo unexpectedly grants a root shell"
 else
     ok "direct root-shell execution is denied"
+fi
+if sudo -n /usr/local/sbin/forensics-privileged apt-install bash >/dev/null 2>&1; then
+    bad "privilege helper accepted a package outside its allowlist"
+else
+    ok "privilege helper rejects unallowlisted packages"
 fi
 
 # ── Audit system ────────────────────────────────────────────────────────────
