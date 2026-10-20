@@ -143,7 +143,8 @@ def run(argv: list[str]) -> int:
         # Do not pass a user-writable pathname to a root chattr process: open
         # the fixed path without following symlinks, then mutate only that fd.
         try:
-            fd = os.open(AUDIT_LOG, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+            open_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+            fd = os.open(AUDIT_LOG, open_flags)
         except OSError as exc:
             return fail(f"cannot safely open audit log: {exc}", 1)
         try:
@@ -151,10 +152,21 @@ def run(argv: list[str]) -> int:
             expected_uid = pwd.getpwnam("sherlock").pw_uid
             if not stat.S_ISREG(info.st_mode) or info.st_uid != expected_uid:
                 return fail("audit log must be a regular file owned by sherlock", 1)
-            current = struct.unpack(_NATIVE_LONG_FORMAT, fcntl.ioctl(fd, FS_IOC_GETFLAGS, struct.pack(_NATIVE_LONG_FORMAT, 0)))[0]
+            current = struct.unpack(
+                _NATIVE_LONG_FORMAT,
+                fcntl.ioctl(
+                    fd,
+                    FS_IOC_GETFLAGS,
+                    struct.pack(_NATIVE_LONG_FORMAT, 0),
+                ),
+            )[0]
             if current & FS_APPEND_FL:
                 return 0
-            fcntl.ioctl(fd, FS_IOC_SETFLAGS, struct.pack(_NATIVE_LONG_FORMAT, current | FS_APPEND_FL))
+            fcntl.ioctl(
+                fd,
+                FS_IOC_SETFLAGS,
+                struct.pack(_NATIVE_LONG_FORMAT, current | FS_APPEND_FL),
+            )
             return 0
         except OSError as exc:
             return fail(f"cannot set append-only flag: {exc}", 1)
